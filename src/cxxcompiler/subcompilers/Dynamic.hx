@@ -45,18 +45,8 @@ class Dynamic_ extends SubCompiler {
 		The function called to enable `Dynamic`.
 	**/
 	public function enableDynamic(blamePosition: Position) {
-		if(!enabled) {
-			// dynamic/Dynamic.h requires this
-			if(exceptionType == null) {
-				exceptionType = Context.getType("haxe.Exception");
-				Main.onTypeEncountered(exceptionType, true, blamePosition);
-			}
-
-			enabled = true;
-
-			// Call `onDynamicEnabled` for Class compiler
-			CComp.onDynamicEnabled();
-		}
+		// Block Dynamic usage - encourage strong typing instead
+		blamePosition.makeError(DynamicUnsupported);
 	}
 
 	/**

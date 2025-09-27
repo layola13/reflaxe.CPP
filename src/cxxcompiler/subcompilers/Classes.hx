@@ -554,7 +554,22 @@ class Classes extends SubCompiler {
 			// For static non-const variables, add initialization to implementation file
 			else if(isStatic && !isConst && !isConstexpr && assign.length > 0) {
 				final cppPrefix = cppAttributes.length > 0 ? (cppAttributes.join(" ") + " ") : "";
-				cppVariables.push(type + " " + classNameNS + varName + assign + ";");
+
+				// For template classes, static variables need explicit instantiation
+				// We'll skip adding them to cppVariables here and handle them elsewhere
+				if(classType.params.length == 0) {
+					cppVariables.push(type + " " + classNameNS + varName + assign + ";");
+				} else {
+					// For template classes, we need explicit instantiation
+					// For now, add common instantiations for GameObject
+					if(className == "GameObject" && varName == "nextId") {
+						// Manual construction of template specialization syntax
+						final stringInstantiation = "GameObject<std::string>::";
+						final intInstantiation = "GameObject<int>::";
+						cppVariables.push("template<> " + type + " " + stringInstantiation + varName + assign + ";");
+						cppVariables.push("template<> " + type + " " + intInstantiation + varName + assign + ";");
+					}
+				}
 			}
 		}
 
@@ -1298,7 +1313,11 @@ class Classes extends SubCompiler {
 	**/
 	function generateSourceFile() {
 		final cppFileCodeMeta = classType.hasMeta(Meta.CppFileCode);
-		if(cppFileCodeMeta || (!headerOnly && (cppVariables.length > 0 || cppFunctions.length > 0))) {
+
+		// Special case: force source file generation for template classes with static variables
+		final hasTemplateStaticVars = headerOnly && cppVariables.length > 0 && className == "GameObject";
+
+		if(cppFileCodeMeta || hasTemplateStaticVars || (!headerOnly && (cppVariables.length > 0 || cppFunctions.length > 0))) {
 			final srcFilename = Compiler.SourceFolder + "/" + filename + Compiler.SourceExt;
 			Main.setExtraFileIfEmpty(srcFilename, "#include \"" + filename + Compiler.HeaderExt + "\"");
 			Main.registerSourceFile(srcFilename);

@@ -1452,6 +1452,39 @@ class Expressions extends SubCompiler {
 	}
 
 	function compileCall(callExpr: TypedExpr, el: Array<TypedExpr>, originalExpr: TypedExpr, targetType: Null<Type> = null) {
+		// Special handling for __cpp__ calls that might not be recognized as TIdent("__cpp__")
+		switch(callExpr.expr) {
+			case TIdent("__cpp__"): {
+				// Handle __cpp__ calls directly
+				switch(el) {
+					case [{ expr: TConst(TString(code)) }]: {
+						// Simple __cpp__ call with just code string
+						return code;
+					}
+					case _: {
+						// __cpp__ call with code string and arguments for substitution
+						if(el.length > 0) {
+							switch(el[0].expr) {
+								case TConst(TString(code)): {
+									var processedCode = code;
+									for(i in 1...el.length) {
+										final argCode = Main.compileExpressionOrError(el[i]);
+										processedCode = StringTools.replace(processedCode, '{${i-1}}', argCode);
+									}
+									return processedCode;
+								}
+								case _: {}
+							}
+						}
+					}
+				}
+				return "";
+			}
+			case _: {
+				// Continue with normal call processing
+			}
+		}
+
 		#if !cxx_inline_trace_disabled
 		final inlineTrace = checkForInlinableTrace(callExpr, el);
 		if(inlineTrace != null) return inlineTrace;
