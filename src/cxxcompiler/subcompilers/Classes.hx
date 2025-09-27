@@ -111,6 +111,10 @@ class Classes extends SubCompiler {
 	public var currentFunction: Null<ClassFuncData> = null;
 	public var superConstructorCall: Null<String> = null;
 
+	// Track which variable fields are actually declared in the header so we can
+	// safely initialize only those in constructor initialization lists.
+	var declaredVarNames: Map<String, Bool> = [];
+
 	// ---------------------------------------------------
 	// The following variables are reset for each
 	// class that's compiled...
@@ -435,6 +439,8 @@ class Classes extends SubCompiler {
 		cppVariables = [];
 		cppFunctions = [];
 
+		declaredVarNames = [];
+
 		extendedFrom = [];
 
 		isExtern = classType.isReflaxeExtern();
@@ -546,6 +552,8 @@ class Classes extends SubCompiler {
 
 			final section = field.meta.extractStringFromFirstMeta(Meta.ClassSection);
 			addVariable(decl + ";", section ?? "public");
+			// Record the raw field name as declared so constructor init can safely reference it.
+			declaredVarNames.set(field.name, true);
 
 			if(addToCpp) {
 				final cppPrefix = cppAttributes.length > 0 ? (cppAttributes.join(" ") + " ") : "";
@@ -1053,8 +1061,17 @@ class Classes extends SubCompiler {
 						switch(field.kind) {
 							case FVar(_, _): {
 								final fieldType = TComp.compileType(field.type, field.pos, false, true);
-								if(StringTools.contains(fieldType, "std::shared_ptr<") && !StringTools.contains(fieldType, " = ")) {
-									constructorInitFields.push(field.name + "(nullptr)");
+								// Check if it's an optional type containing a shared_ptr
+								if(StringTools.contains(fieldType, "std::optional<") && StringTools.contains(fieldType, "std::shared_ptr<")) {
+									if(declaredVarNames.exists(field.name)) {
+										constructorInitFields.push(field.name + "(std::nullopt)");
+									}
+								}
+								// Regular shared_ptr (not wrapped in optional)
+								else if(StringTools.contains(fieldType, "std::shared_ptr<") && !StringTools.contains(fieldType, " = ")) {
+									if(declaredVarNames.exists(field.name)) {
+										constructorInitFields.push(field.name + "(nullptr)");
+									}
 								}
 							}
 							case _:

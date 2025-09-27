@@ -226,19 +226,19 @@ class Dynamic_ extends SubCompiler {
 		Compile unknown template args as Dynamic.
 		Useful for functions that require type parameters.
 	**/
-	function restrictTypeParams(f: ClassFuncData) {
-		// Allow all type parameters so wrappers can reference
-		// both class-level params and any template params synthesized
-		// during argument compilation (e.g., Dyn1, Dyn2 for Dynamic).
-		TComp.allowAllTypeParamNames();
-	}
+    function restrictTypeParams(f: ClassFuncData) {
+        // Only allow class-level type parameters. Any method-level or
+        // synthesized template params (e.g., DynN, S/T) should degrade to
+        // Dynamic in wrapper generation to keep wrappers non-templated.
+        TComp.setAllowedTypeParamNames(f.classType.params.map(p -> p.name));
+    }
 
 	/**
 		Finish compiling the argument types.
 	**/
-	function unrestrictTypeParams() {
-		TComp.allowAllTypeParamNames();
-	}
+    function unrestrictTypeParams() {
+        TComp.allowAllTypeParamNames();
+    }
 
 	/**
 		Check if function is extern inline or @:runtime inline.

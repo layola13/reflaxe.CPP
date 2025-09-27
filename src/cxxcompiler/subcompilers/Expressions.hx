@@ -198,19 +198,39 @@ class Expressions extends SubCompiler {
 				result = Main.compileExpression(nullCompExpr);
 
 				if(!Main.getExprType(nullCompExpr).isNull()) {
-					// The type is non-nullable, so we'll just use the bool operator instead.
-					switch(op) {
-						case OpNotEq: {}
-						case OpEq: {
-							result = "!" + result;
+					// The type is non-nullable pointer, we need to compare with nullptr
+					final exprType = Main.getExprType(nullCompExpr);
+					final mmt = Types.getMemoryManagementTypeFromType(exprType);
+					if(exprType.isPtr() || mmt == SharedPtr || mmt == UniquePtr) {
+						// For pointer types, always use nullptr comparison
+						switch(op) {
+							case OpNotEq: {
+								result = "(" + result + " != nullptr)";
+							}
+							case OpEq: {
+								result = "(" + result + " == nullptr)";
+							}
+							case _: {}
 						}
-						case _: {}
+					} else {
+						// For non-pointer types, use the bool operator
+						switch(op) {
+							case OpNotEq: {
+								// For != null on non-nullable non-pointer, just output the variable
+								// wrapped in a boolean context
+								result = "(bool(" + result + "))";
+							}
+							case OpEq: {
+								result = "!" + result;
+							}
+							case _: {}
+						}
 					}
 				} else {
-					// The type is nullable, so we can use std::optional methods.
+					// The type is nullable (std::optional), so we can use std::optional methods.
 					switch(op) {
 						case OpNotEq: {
-							result += ".has_value()";
+							result = result + ".has_value()";
 						}
 						case OpEq: {
 							result = "!" + result + ".has_value()";
@@ -373,8 +393,33 @@ class Expressions extends SubCompiler {
 				result = compileIf(econd, ifExpr, elseExpr);
 			}
 			case TWhile(econd, blockExpr, normalWhile): {
-				final nullableBoolT = TAbstract(Main.getNullType(), [Context.getType("Bool")]);
-				final cppCond = XComp.compileExpressionForType(econd.unwrapParenthesis(), nullableBoolT);
+				// Don't wrap the condition in Null<Bool> if it's already a boolean expression
+				final condExpr = econd.unwrapParenthesis();
+				final cppCond = switch(condExpr.expr) {
+					// For != null comparisons, handle based on type
+					case TBinop(OpNotEq, { expr: TConst(TNull) }, e) | TBinop(OpNotEq, e, { expr: TConst(TNull) }): {
+						final eType = Main.getExprType(e);
+						// Check if it's a nullable type (std::optional)
+						if(eType.isNull()) {
+							// For std::optional types, use has_value()
+							final eCpp = Main.compileExpression(e);
+							eCpp + ".has_value()";
+						} else if(eType.isPtr() || Types.getMemoryManagementTypeFromType(eType) == SharedPtr) {
+							// For non-nullable pointer types, use nullptr comparison
+							final eCpp = Main.compileExpression(e);
+							"(" + eCpp + " != nullptr)";
+						} else {
+							// For other types, compile as Null<Bool>
+							final nullableBoolT = TAbstract(Main.getNullType(), [Context.getType("Bool")]);
+							XComp.compileExpressionForType(condExpr, nullableBoolT);
+						}
+					}
+					case _: {
+						// For other conditions, compile as Null<Bool>
+						final nullableBoolT = TAbstract(Main.getNullType(), [Context.getType("Bool")]);
+						XComp.compileExpressionForType(condExpr, nullableBoolT);
+					}
+				}
 				if(normalWhile) {
 					result = "while(" + cppCond + ") {\n";
 					result += toIndentedScope(blockExpr);
@@ -532,8 +577,9 @@ class Expressions extends SubCompiler {
 		if(unwrapOptional) {
 			final t = Main.getExprType(expr);
 			if(t.isNull() && !expr.isNullExpr()) {
-				final isValue = t.getInternalType().isTypeParameter() || Types.getMemoryManagementTypeFromType(t) == Value;
-				result = ensureSafeToAccess(result) + (isValue ? ".value()" : '.value_or(${Compiler.PointerNullCpp})');
+				// Always use .value() for accessing members of optional types
+				// This will throw std::bad_optional_access if null, which matches Haxe's null access behavior
+				result = ensureSafeToAccess(result) + ".value()";
 			}
 		}
 
@@ -696,7 +742,9 @@ class Expressions extends SubCompiler {
 			// This is true if `null` is not allowed, but the source expression is nullable.
 			final nullToNotNull = !allowNull && nullToValue && !expr.isNullExpr();
 			if(nullMMConvert || nullToNotNull) {
-				return ensureSafeToAccess(cpp) + (pointerType ? '.value_or(${Compiler.PointerNullCpp})' : ".value()");
+				// Always use .value() to properly unwrap std::optional
+				// This ensures null access will throw std::bad_optional_access
+				return ensureSafeToAccess(cpp) + ".value()";
 			}
 			return cpp;
 		}
@@ -1052,6 +1100,18 @@ class Expressions extends SubCompiler {
 				cppExpr1 = '($cppExpr1)';
 			if(parenthesis2)
 				cppExpr2 = '($cppExpr2)';
+		}
+
+		// Special-case: assigning to a C++ container's size() should call resize(...)
+		if(op.isAssignDirect()) {
+			// Detect patterns like `X->size()` or `X.size()` on the LHS
+			if(StringTools.endsWith(cppExpr1, "->size()")) {
+				final recv = cppExpr1.substr(0, cppExpr1.length - "->size()".length);
+				return recv + "->resize(" + cppExpr2 + ")";
+			} else if(StringTools.endsWith(cppExpr1, ".size()")) {
+				final recv = cppExpr1.substr(0, cppExpr1.length - ".size()".length);
+				return recv + ".resize(" + cppExpr2 + ")";
+			}
 		}
 
 		// Generate final C++ code!
@@ -1744,7 +1804,16 @@ class Expressions extends SubCompiler {
 		for(i in 0...el.length) {
 			final paramExpr = el[i];
 			final cpp = if(funcArgs != null && i < funcArgs.length && funcArgs[i] != null) {
-				compileExpressionForType(paramExpr, funcArgs[i]);
+				// For constructor arguments, if the parameter type is nullable (std::optional)
+				// and the expression is also nullable, we should NOT unwrap it
+				final targetType = funcArgs[i];
+				if(targetType.isNull() && Main.getExprType(paramExpr).isNull()) {
+					// Both are nullable, just compile normally without unwrapping
+					Main.compileExpressionOrError(paramExpr);
+				} else {
+					// Use normal type conversion
+					compileExpressionForType(paramExpr, targetType);
+				}
 			} else {
 				Main.compileExpressionOrError(paramExpr);
 			}
