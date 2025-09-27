@@ -225,12 +225,32 @@ class Anon extends SubCompiler {
 
 		TComp.enableDynamicToTemplate([]);
 
+		// Separate required and optional fields for proper C++ parameter ordering
+		final requiredFields = [];
+		final optionalFields = [];
+
 		for(f in anonFields) {
 			final t = TComp.compileType(f.type, f.pos ?? reflaxe.helpers.PositionHelper.unknownPos());
 			final v = t + " " + f.name;
 			fields.push(v);
-			constructorParams.push(v + (f.optional ? " = " + Compiler.OptionalNullCpp : ""));
 			constructorAssigns.push("result." + f.name + " = " + f.name);
+
+			if(f.optional) {
+				optionalFields.push({ field: f, paramStr: v + " = " + Compiler.OptionalNullCpp });
+			} else {
+				requiredFields.push({ field: f, paramStr: v });
+			}
+		}
+
+		// Add required parameters first, then optional parameters with defaults
+		for(rf in requiredFields) {
+			constructorParams.push(rf.paramStr);
+		}
+		for(of in optionalFields) {
+			constructorParams.push(of.paramStr);
+		}
+
+		for(f in anonFields) {
 
 			switch(f.type) {
 				case TFun(args, ret): {
@@ -559,9 +579,9 @@ ${unwrapMMSmartPtr.tab()}
 template<typename T, typename Other = decltype(T().fieldName), typename U = typename haxe::optional_info<Other>::inner>\\
 static auto extract_##fieldName(T other) {\\
 	if constexpr(!haxe::optional_info<decltype(fieldName)>::isopt && haxe::optional_info<Other>::isopt) {\\
-		return other.customParam.get();\\
+		return other.fieldName.get();\\
 	} else if constexpr(std::is_same<U,haxe::optional_info<decltype(fieldName)>::inner>::value) {\\
-		return other.customParam;\\
+		return other.fieldName;\\
 	} else {\\
 		return ${Compiler.OptionalNullCpp};\\
 	}\\
