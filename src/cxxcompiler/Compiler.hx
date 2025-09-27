@@ -758,6 +758,7 @@ class Compiler extends reflaxe.DirectToStringCompiler {
 			content += "#include <optional>\n";
 			content += "#include <string>\n";
 			content += "#include <deque>\n";
+			content += "#include <functional>\n";  // Add functional header for std::function
 			content += "#include \"DynamicToString.h\"\n\n";
 			// Use forward declarations instead of including headers to avoid circular dependencies
 			content += "// Forward declarations\n";

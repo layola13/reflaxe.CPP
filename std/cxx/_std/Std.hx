@@ -11,11 +11,27 @@ package;
 @:dontGenerateDynamic
 class StdImpl {
 	public static function isOfType<_Value, _Type>(v: _Value, t: _Type): Bool {
-		untyped __cpp__("if constexpr(!haxe::_unwrap_class<_Type>::iscls) {
-	return false;
-} else if constexpr(std::is_base_of<typename haxe::_unwrap_class<_Type>::inner, typename haxe::_unwrap_mm<_Value>::inner>::value) {
-	return true;
-}");
+		untyped __cpp__("
+		// Special handling for std::any type
+		if constexpr(std::is_same_v<_Value, std::any>) {
+			if constexpr(!haxe::_unwrap_class<_Type>::iscls) {
+				return false;
+			} else {
+				// Check if the Any contains the expected type
+				if (({0}).type() == typeid(typename haxe::_unwrap_class<_Type>::inner)) {
+					return true;
+				}
+				return false;
+			}
+		} else {
+			// Original logic for non-Any types
+			if constexpr(!haxe::_unwrap_class<_Type>::iscls) {
+				return false;
+			} else if constexpr(std::is_base_of<typename haxe::_unwrap_class<_Type>::inner, typename haxe::_unwrap_mm<_Value>::inner>::value) {
+				return true;
+			}
+		}
+		", v);
 		return false;
 	}
 }
