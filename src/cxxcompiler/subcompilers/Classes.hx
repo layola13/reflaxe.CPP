@@ -538,15 +538,23 @@ class Classes extends SubCompiler {
 			// Generate variable C++
 			final assign = (cppVal.length == 0 ? "" : (" = " + cppVal));
 			var decl = prefix + type + " " + varName;
-			if(!addToCpp) {
+
+			// For static non-const variables, don't add initialization in header (C++11 standard)
+			if(!addToCpp && !(isStatic && !isConst && !isConstexpr)) {
 				decl += assign;
 			}
+
 			final section = field.meta.extractStringFromFirstMeta(Meta.ClassSection);
 			addVariable(decl + ";", section ?? "public");
 
 			if(addToCpp) {
 				final cppPrefix = cppAttributes.length > 0 ? (cppAttributes.join(" ") + " ") : "";
 				cppVariables.push(cppPrefix + type + " " + classNameNS + varName + assign + ";");
+			}
+			// For static non-const variables, add initialization to implementation file
+			else if(isStatic && !isConst && !isConstexpr && assign.length > 0) {
+				final cppPrefix = cppAttributes.length > 0 ? (cppAttributes.join(" ") + " ") : "";
+				cppVariables.push(type + " " + classNameNS + varName + assign + ";");
 			}
 		}
 

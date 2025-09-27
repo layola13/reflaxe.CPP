@@ -42,6 +42,7 @@ class CMake {
 	public static var lines = [
 		"<MINIMUM_REQUIRED>",
 		"<PROJECT>",
+		"<CXX_STANDARD>",
 		"<INCLUDE_DIRS>",
 		"<ADD_EXECUTABLE>"
 	];
@@ -173,6 +174,20 @@ class CMake {
 				}
 
 				result.push('project(${projectName ?? DEFAULT_PROJECT_NAME} VERSION ${projectVersion ?? DEFAULT_PROJECT_VERSION} LANGUAGES CXX)\n');
+			}
+
+			/**
+				<CXX_STANDARD>
+
+				Adds the C++ standard settings.
+			**/
+			case "<CXX_STANDARD>": {
+				if(addComments) {
+					result.push("# Set C++17 standard");
+				}
+				result.push("set(CMAKE_CXX_STANDARD 17)");
+				result.push("set(CMAKE_CXX_STANDARD_REQUIRED ON)");
+				result.push("set(CMAKE_CXX_EXTENSIONS OFF)\n");
 			}
 
 			/**

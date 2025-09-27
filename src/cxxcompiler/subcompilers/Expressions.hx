@@ -1326,7 +1326,11 @@ class Expressions extends SubCompiler {
 				case FEnum(enumRef, enumField): {
 					onModuleTypeEncountered(TEnumDecl(enumRef), accessExpr.pos);
 
-					final enumName = TComp.compileEnumName(enumRef, e.pos, null, true, true);
+					// Get template parameters from the expression's actual type, not the field declaration
+					final exprType = Main.getExprType(accessExpr);
+					final params = exprType.getParams();
+
+					final enumName = TComp.compileEnumName(enumRef, e.pos, params, true, true);
 					final potentialArgs = enumField.type.getTFunArgs();
 
 					// If there are no arguments, Haxe treats the enum case as

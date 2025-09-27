@@ -150,17 +150,48 @@ class Includes extends SubCompiler {
 	// ----------------------------
 	// Add include while compiling code.
 	public function addInclude(include: String, header: Bool, triangleBrackets: Bool = false) {
+		// Fix problematic include names with angle brackets and namespace issues
+		var fixedInclude = include;
+
+		// Handle Enum<Type>.h -> Type.h (highest priority)
+		if(include.indexOf("<") != -1 && include.indexOf(">") != -1) {
+			if(include.startsWith("Enum<") && include.endsWith(">.h")) {
+				var baseName = include.substring(5, include.length - 3); // Remove "Enum<" and ">.h"
+				fixedInclude = baseName + ".h";
+			}
+			// Handle Class<Type>.h -> Type.h
+			else if(include.startsWith("Class<") && include.endsWith(">.h")) {
+				var baseName = include.substring(6, include.length - 3); // Remove "Class<" and ">.h"
+				fixedInclude = baseName + ".h";
+			}
+		}
+		// Handle namespace prefixed includes like _Game2.Color_Impl_.h -> Color_Impl_.h
+		// Only if we haven't already processed angle brackets
+		else if(include.indexOf(".") != -1 && include.endsWith(".h")) {
+			var parts = include.split(".");
+			if(parts.length >= 2) {
+				var fileName = parts[parts.length - 1]; // Get the ".h" part
+				var typeName = parts[parts.length - 2]; // Get the actual type name before .h
+
+				// If this looks like a namespaced type (e.g., _Game2.Color_Impl_ or haxe.Log)
+				// extract just the type name and add .h
+				if(typeName.length > 0) {
+					fixedInclude = typeName + "." + fileName;
+				}
+			}
+		}
+
 		function add(arr: Array<String>, inc: String) {
 			if(!arr.contains(inc)) {
 				arr.push(inc);
 			}
 		}
 
-		if(ignoreIncludes.contains(include)) {
+		if(ignoreIncludes.contains(fixedInclude)) {
 			return;
 		}
 
-		final includeStr = wrapInclude(include, triangleBrackets);
+		final includeStr = wrapInclude(fixedInclude, triangleBrackets);
 		add(header ? headerIncludes : cppIncludes, includeStr);
 	}
 
@@ -181,8 +212,18 @@ class Includes extends SubCompiler {
 	public function addForwardDeclare(mt: ModuleType) {
 		switch(mt) {
 			case TAbstract(_): throw "Cannot forward declare abstract";
+			case TClassDecl(clsRef): {
+				// Don't create forward declarations for type parameters
+				switch(clsRef.get().kind) {
+					case KTypeParameter(_): return;
+					case _:
+				}
+			}
 			case _:
 		}
+
+		// Don't create forward declarations for types that don't need includes
+		if(isNoIncludeType(mt)) return;
 
 		final baseType = mt.getCommonData();
 		if(baseType.isExtern) throw "Cannot forward declare extern class";
@@ -254,7 +295,17 @@ class Includes extends SubCompiler {
 				addIncludeFromType(inner, header);
 			}
 			case TType(_.get() => defType, []) if((defType.name.startsWith("Class<") || defType.name.startsWith("Enum<")) && defType.pack.length == 0): {
-				return; // Ignore weird "Class<T>" and "Enum<T>" typedefs?
+				// For generic type instances like Enum<Option>, extract the base type name
+				// and generate include for that instead of the parameterized name
+				var baseName = defType.name;
+				if(baseName.startsWith("Enum<") && baseName.endsWith(">")) {
+					baseName = baseName.substring(5, baseName.length - 1); // Remove "Enum<" and ">"
+					addInclude(baseName + Compiler.HeaderExt, header, false);
+				} else if(baseName.startsWith("Class<") && baseName.endsWith(">")) {
+					baseName = baseName.substring(6, baseName.length - 1); // Remove "Class<" and ">"
+					addInclude(baseName + Compiler.HeaderExt, header, false);
+				}
+				return;
 			}
 			case ut: {
 				final mt = t.toModuleType();

@@ -86,7 +86,15 @@ class Enums extends SubCompiler {
 		// --------------------
 		// Generate entire class declaration in "declaration"
 		final enumName = TComp.compileEnumName(enumTypeRef, enumType.pos, null, false, true);
-		var declaration = "class " + enumName + " {\npublic:\n";
+
+		// Add template declaration for generic enums
+		var templateDecl = "";
+		if(enumType.params.length > 0) {
+			var typeParams = enumType.params.map(p -> "typename " + p.name).join(", ");
+			templateDecl = "template<" + typeParams + ">\n";
+		}
+
+		var declaration = templateDecl + "class " + enumName + " {\npublic:\n";
 		declaration += "\tint index;\n\n";
 
 		// --------------------
