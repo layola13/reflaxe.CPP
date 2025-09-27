@@ -754,7 +754,14 @@ class Compiler extends reflaxe.DirectToStringCompiler {
 		if(genAnonStructHeader) {
 			var content = "#pragma once\n\n";
 			content += "#include \"" + optionalInfoHeaderName + "\"\n\n";
-			content += IComp.compileHeaderIncludes() + "\n\n";
+			content += "#include <memory>\n";
+			content += "#include <optional>\n";
+			content += "#include <string>\n";
+			content += "#include <deque>\n";
+			content += "#include \"DynamicToString.h\"\n\n";
+			// Use forward declarations instead of including headers to avoid circular dependencies
+			content += "// Forward declarations\n";
+			content += IComp.compileForwardDeclares() + "\n\n";
 			content += "namespace haxe {\n\n";
 			content += anonContent;
 			content += "\n}";
@@ -854,14 +861,18 @@ class Compiler extends reflaxe.DirectToStringCompiler {
 	}
 
 	/**
-		If enabled, this will generate the `CMakeLists.txt`
+		Automatically generates the `CMakeLists.txt`
 		file in the output folder.
 	**/
 	function generateCMake() {
 		#if (macro || display)
-		if(cxx.CMake.isEnabled()) {
-			setExtraFile(cxx.CMake.getOutputPath(), cxx.CMake.generateCMakeLists(registeredSourceFiles));
+		// Always generate CMakeLists.txt to ensure build system is available
+		final cmakePath = if(cxx.CMake.isEnabled()) {
+			cxx.CMake.getOutputPath();
+		} else {
+			"CMakeLists.txt";
 		}
+		setExtraFile(cmakePath, cxx.CMake.generateCMakeLists(registeredSourceFiles));
 		#end
 	}
 
@@ -945,9 +956,10 @@ class Compiler extends reflaxe.DirectToStringCompiler {
 
 	public static function getFileNameFromModuleData(md: BaseType): String {
 		return if(md.hasMeta(Meta.Filename)) {
-			md.meta.extractStringFromFirstMeta(Meta.Filename) ?? md.moduleId();
+			md.meta.extractStringFromFirstMeta(Meta.Filename) ?? md.name;
 		} else {
-			md.moduleId();
+			// Use type name instead of module name for better file separation
+			md.name;
 		}
 	}
 

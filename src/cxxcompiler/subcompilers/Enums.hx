@@ -302,7 +302,10 @@ class Enums extends SubCompiler {
 		content += declaration;
 		content += Main.compileNamespaceEnd(enumType);
 
-		Main.appendToExtraFile(headerFilePath, content + "\n", 3);
+		// Use dependency tracker to determine correct priority order
+		final currentDep = Main.getCurrentDep();
+		final priority = currentDep != null ? currentDep.getPriority() : DependencyTracker.minimum;
+		Main.appendToExtraFile(headerFilePath, content + "\n", priority);
 
 		// Let the reflection compiler know this enum was compiled.
 		RComp.addCompiledModuleType(Main.getCurrentModule().trustMe());

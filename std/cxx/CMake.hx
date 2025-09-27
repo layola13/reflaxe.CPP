@@ -15,7 +15,7 @@ import sys.FileSystem;
 **/
 @:cxxStd
 class CMake {
-	static final DEFAULT_MINIMUM_REQUIRED = "3.27";
+	static final DEFAULT_MINIMUM_REQUIRED = "3.16";
 	static final DEFAULT_PROJECT_NAME = "UntitledHaxeProject";
 	static final DEFAULT_PROJECT_VERSION = "1.0";
 	static final DEFAULT_EXECUTABLE_NAME = "Untitled";

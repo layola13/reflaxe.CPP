@@ -63,6 +63,16 @@ class Anon extends SubCompiler {
 
 		if(as == null) {
 			as = findAnonStruct(anonFields);
+			// Try to find if there's a matching named typedef for this anonymous structure
+			if(!isNamed) {
+				for(namedKey => namedStruct in namedAnonStructs) {
+					if(hasSameStructure(as, namedStruct)) {
+						as = namedStruct;
+						isNamed = true;
+						break;
+					}
+				}
+			}
 		}
 
 		final el: Array<TypedExpr> = [];
@@ -78,7 +88,14 @@ class Anon extends SubCompiler {
 		final internalType = type.unwrapNullTypeOrSelf();
 
 		var name = if(isNamed) {
-			TComp.compileType(internalType, originalExpr.pos, true);
+			// For named anonymous structs (typedefs), extract just the type name
+			if(as.name.indexOf("::") >= 0) {
+				// This is a typedef like "Main::Player", extract just "Player"
+				final parts = as.name.split("::");
+				parts[parts.length - 1];
+			} else {
+				TComp.compileType(internalType, originalExpr.pos, true);
+			}
 		} else {
 			"haxe::" + as.name;
 		}
@@ -153,7 +170,14 @@ class Anon extends SubCompiler {
 		return switch(tmmt) {
 			case Value: cppName + "::make(" + cppArgs.join(", ") + ")";
 			case UnsafePtr: throw "Unable to construct.";
-			case SharedPtr: "haxe::shared_anon<" + cppName + ">(" + cppArgs.join(", ") + ")";
+			case SharedPtr: {
+				// If this is a named type (typedef), create it directly as shared_ptr
+				if(cppName.indexOf("haxe::") != 0) {
+					"std::make_shared<" + cppName + ">(" + cppName + "::make(" + cppArgs.join(", ") + "))";
+				} else {
+					"haxe::shared_anon<" + cppName + ">(" + cppArgs.join(", ") + ")";
+				}
+			}
 			case UniquePtr: "haxe::unique_anon<" + cppName + ">(" + cppArgs.join(", ") + ")";
 		}
 	}
@@ -353,10 +377,74 @@ class Anon extends SubCompiler {
 		for(name => as in anonStructs) {
 			decls.push(as.cpp);
 			for(f in as.constructorOrder) {
-				Main.onTypeEncountered(f.type, true, f.pos ?? PositionHelper.unknownPos());
+				// Add forward declarations instead of full type includes to avoid circular dependencies
+				addForwardDeclarationsForType(f.type, f.pos ?? PositionHelper.unknownPos());
 			}
 		}
 		return decls.join("\n\n");
+	}
+
+	function hasSameStructure(as1: AnonStruct, as2: AnonStruct): Bool {
+		if(as1.constructorOrder.length != as2.constructorOrder.length) {
+			return false;
+		}
+
+		for(i in 0...as1.constructorOrder.length) {
+			final field1 = as1.constructorOrder[i];
+			final field2 = as2.constructorOrder[i];
+
+			if(field1.name != field2.name || field1.optional != field2.optional) {
+				return false;
+			}
+
+			// Check if types are compatible (simplified check)
+			final key1 = makeFieldKey(field1);
+			final key2 = makeFieldKey(field2);
+			if(key1 != key2) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	function addForwardDeclarationsForType(type: Type, pos: Position) {
+		switch(type.unwrapNullTypeOrSelf()) {
+			case TInst(classRef, _): {
+				final classType = classRef.get();
+				if(!classType.isExtern) {
+					try {
+						IComp.addForwardDeclare(TClassDecl(classRef));
+					} catch(e:Dynamic) {
+						// Fall back to original behavior if forward declaration fails
+						Main.onTypeEncountered(type, true, pos);
+					}
+				}
+			}
+			case TEnum(enumRef, _): {
+				final enumType = enumRef.get();
+				if(!enumType.isExtern) {
+					try {
+						IComp.addForwardDeclare(TEnumDecl(enumRef));
+					} catch(e:Dynamic) {
+						// Fall back to original behavior if forward declaration fails
+						Main.onTypeEncountered(type, true, pos);
+					}
+				}
+			}
+			case TType(defTypeRef, _): {
+				try {
+					IComp.addForwardDeclare(TTypeDecl(defTypeRef));
+				} catch(e:Dynamic) {
+					// Fall back to original behavior if forward declaration fails
+					Main.onTypeEncountered(type, true, pos);
+				}
+			}
+			case _: {
+				// For other types, use the original behavior
+				Main.onTypeEncountered(type, true, pos);
+			}
+		}
 	}
 
 	function optionalInfoContent() {

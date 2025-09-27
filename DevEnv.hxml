@@ -6,4 +6,6 @@
 --macro nullSafety("cxxcompiler")
 -lib reflaxe
 -cp src
+-cp std
+-cp std/cxx/_std
 cxxcompiler

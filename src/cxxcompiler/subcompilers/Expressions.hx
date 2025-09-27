@@ -545,6 +545,15 @@ class Expressions extends SubCompiler {
 					// `compileMMConversion(expr, Right(Value));`
 					final exprCpp = Main.compileExpressionOrError(expr);
 					cpp = applyMMConversion(exprCpp, expr.pos, targetType, Value, SharedPtr);
+				} else if(exprInternalType.isAnonStruct() && targetType.isAnonStructOrNamedStruct()) {
+					// Handle conversion from anonymous struct to named struct (typedef)
+					final exprCpp = Main.compileExpressionOrError(expr);
+					final targetInternalType = targetType.getInternalType();
+
+					// For shared_ptr<T> targets, we want to create shared_ptr<T> from anonymous struct
+					// The inner type should be T, not shared_ptr<T>
+					final innerCpp = TComp.compileType(targetInternalType, expr.pos, false);
+					cpp = "std::make_shared<" + innerCpp + ">(*" + exprCpp + ")";
 				}
 			}
 		}

@@ -1,3 +1,5 @@
+-cp ../reflaxe.CPP/std
+-cp ../reflaxe.CPP/std/cxx/_std
 -D cxx
 -D reflaxe.cpp
 -D retain-untyped-meta
