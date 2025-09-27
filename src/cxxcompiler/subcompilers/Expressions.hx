@@ -10,6 +10,7 @@ package cxxcompiler.subcompilers;
 #if (macro || cxx_runtime)
 
 import haxe.ds.Either;
+import StringTools;
 
 import reflaxe.helpers.Context; // Use like haxe.macro.Context
 import haxe.macro.Expr;
@@ -289,6 +290,31 @@ class Expressions extends SubCompiler {
 					case _: {}
 				}
 				result = null;
+			}
+			case TCall({ expr: TIdent("__cpp__") }, el): {
+				switch(el) {
+					case [{ expr: TConst(TString(code)) }]: {
+						// Simple __cpp__ call with just code string
+						result = code;
+					}
+					case _: {
+						// __cpp__ call with code string and arguments for substitution
+						if(el.length > 0) {
+							switch(el[0].expr) {
+								case TConst(TString(code)): {
+									var processedCode = code;
+									for(i in 1...el.length) {
+										final argCode = Main.compileExpressionOrError(el[i]);
+										processedCode = StringTools.replace(processedCode, '{${i-1}}', argCode);
+									}
+									result = processedCode;
+								}
+								case _: {}
+							}
+						}
+					}
+				}
+				if(result == null) result = "";
 			}
 			case TCall(callExpr, el): {
 				result = compileCall(callExpr, el, expr);
@@ -602,6 +628,7 @@ class Expressions extends SubCompiler {
 				final old = setExplicitNull(true, targetType != null && targetType.isAmbiguousNullable());
 				final result = switch(exprDef) {
 					case TField(e, fa): fieldAccessToCpp(e, fa, expr, targetType);
+					case TCall(callExpr, el): compileCall(callExpr, el, expr, targetType);
 					case _ if(allowNullReturn): Main.compileExpression(expr);
 					case _: Main.compileExpressionOrError(expr);
 				}
@@ -1326,11 +1353,24 @@ class Expressions extends SubCompiler {
 				case FEnum(enumRef, enumField): {
 					onModuleTypeEncountered(TEnumDecl(enumRef), accessExpr.pos);
 
-					// Get template parameters from the expression's actual type, not the field declaration
-					final exprType = Main.getExprType(accessExpr);
-					final params = exprType.getParams();
+					// Get template parameters from the target type (if available) or expression type
+					final templateParams = if(targetType != null) {
+						switch(targetType) {
+							case TEnum(_, params): params;
+							case _: switch(Main.getExprType(accessExpr)) {
+								case TEnum(_, params): params;
+								case _: [];
+							};
+						}
+					} else {
+						switch(Main.getExprType(accessExpr)) {
+							case TEnum(_, params): params;
+							case _: [];
+						}
+					};
 
-					final enumName = TComp.compileEnumName(enumRef, e.pos, params, true, true);
+					// Use the actual template parameters for the enum name
+					final enumName = TComp.compileEnumName(enumRef, e.pos, templateParams, true, true);
 					final potentialArgs = enumField.type.getTFunArgs();
 
 					// If there are no arguments, Haxe treats the enum case as
@@ -1411,7 +1451,7 @@ class Expressions extends SubCompiler {
 		return Main.compileNativeFunctionCodeMeta(callExpr, el, typeParamCallback);
 	}
 
-	function compileCall(callExpr: TypedExpr, el: Array<TypedExpr>, originalExpr: TypedExpr) {
+	function compileCall(callExpr: TypedExpr, el: Array<TypedExpr>, originalExpr: TypedExpr, targetType: Null<Type> = null) {
 		#if !cxx_inline_trace_disabled
 		final inlineTrace = checkForInlinableTrace(callExpr, el);
 		if(inlineTrace != null) return inlineTrace;
@@ -1459,6 +1499,38 @@ class Expressions extends SubCompiler {
 						}
 						case _:
 					}
+				}
+				case _:
+			}
+
+			// Special handling for enum constructor calls
+			switch(callExpr.expr) {
+				case TField(e, FEnum(enumRef, enumField)): {
+					// Get template parameters from target type if available, otherwise from original expression
+					final templateParams = if(targetType != null) {
+						switch(targetType.unwrapNullTypeOrSelf()) {
+							case TEnum(_, params): params;
+							case _: [];
+						}
+					} else {
+						final originalExprType = Main.getExprType(originalExpr);
+						switch(originalExprType) {
+							case TEnum(_, params): params;
+							case _: [];
+						}
+					};
+
+					// Generate template parameter string if needed
+					var templateParamStr = "";
+					if(templateParams.length > 0) {
+						final compiledParams = templateParams.map(p -> TComp.compileType(p, callExpr.pos));
+						templateParamStr = "<" + compiledParams.join(", ") + ">";
+					}
+
+					final enumName = TComp.compileEnumName(enumRef, callExpr.pos, null, true, true);
+					final fieldName = Main.compileVarName(enumField.getNameOrNativeName());
+					final cppArgs = el.map(e -> Main.compileExpressionOrError(e));
+					return enumName + templateParamStr + "::" + fieldName + "(" + cppArgs.join(", ") + ")";
 				}
 				case _:
 			}

@@ -237,7 +237,10 @@ class Dynamic_ extends SubCompiler {
 		Useful for functions that require type parameters.
 	**/
 	function restrictTypeParams(f: ClassFuncData) {
-		TComp.setAllowedTypeParamNames(f.classType.params.map(p -> p.name));
+		// Allow all type parameters so wrappers can reference
+		// both class-level params and any template params synthesized
+		// during argument compilation (e.g., Dyn1, Dyn2 for Dynamic).
+		TComp.allowAllTypeParamNames();
 	}
 
 	/**
@@ -462,15 +465,12 @@ struct _mm_type<std::unique_ptr<T>> { using inner = T; constexpr static DynamicT
 
 // ---
 
-// Use within the Dynamic to extract a pointer type
-// from a Dynamic into a local variable `p`.
+// Use within Dynamic to extract a pointer to an inner value of type `t`.
+// Avoid instantiating `t` by value (which fails for abstract/interface types).
 #define DYN_GETPTR(name, t) \\
-	${Compiler.OptionalClassCpp}<t> v;\\
-	if(name._dynType == Value) v = std::any_cast<t>(name._anyObj);\\
-	else v = ${Compiler.OptionalNullCpp};\\
 	t* p = ${Compiler.PointerNullCpp};\\
 	if(name._dynType == Value) {\\
-		p = v.operator->();\\
+		p = const_cast<t*>(std::any_cast<t>(&name._anyObj));\\
 	} else {\\
 		p = name.asType<t*>();\\
 	}
@@ -840,15 +840,9 @@ public:
 		Dynamic result;
 		result._dynType = Function;
 		result.func = [callback, d](std::deque<Dynamic> args) {
-			${Compiler.OptionalClassCpp}<T> v;
-			if(d._dynType == Value) v = std::any_cast<T>(d._anyObj);
-			else v = ${Compiler.OptionalNullCpp};
 			T* p = ${Compiler.PointerNullCpp};
-			if(d._dynType == Value) {
-				p = v.operator->();
-			} else {
-				p = d.asType<T*>();
-			}
+			if(d._dynType == Value) { p = const_cast<T*>(std::any_cast<T>(&d._anyObj)); }
+			else { p = d.asType<T*>(); }
 			return callback(p, args);
 		};
 		return result;

@@ -351,13 +351,17 @@ class Anon extends SubCompiler {
 	}
 
 	function findAnonStruct(anonFields: Array<AnonField>): AnonStruct {
+		// Ensure stable ordering: required fields first, then optional, then alphabetic
+		final sortedFields = anonFields.sorted(orderFields);
 		final key = makeAnonStructKey(anonFields);
 		if(!anonStructs.exists(key)) {
 			final name = "AnonStruct" + (anonId++);
-			final decl = makeAnonTypeDecl(name, anonFields);
+			// Generate declaration using the stable, sorted field order so that
+			// defaulted parameters (optional fields) appear only at the end.
+			final decl = makeAnonTypeDecl(name, sortedFields);
 			anonStructs.set(key, {
 				name: name,
-				constructorOrder: anonFields,
+				constructorOrder: sortedFields,
 				templates: decl.templates,
 				cpp: decl.cpp
 			});
