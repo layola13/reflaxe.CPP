@@ -1047,6 +1047,22 @@ class Classes extends SubCompiler {
 				}
 
 				// -----------------
+				// Initialize pointer member variables to nullptr to prevent segfault
+				if(classType != null) {
+					for(field in classType.fields.get()) {
+						switch(field.kind) {
+							case FVar(_, _): {
+								final fieldType = TComp.compileType(field.type, field.pos, false, true);
+								if(StringTools.contains(fieldType, "std::shared_ptr<") && !StringTools.contains(fieldType, " = ")) {
+									constructorInitFields.push(field.name + "(nullptr)");
+								}
+							}
+							case _:
+						}
+					}
+				}
+
+				// -----------------
 				// Generate field initializations in constructor
 				//
 				// TODO:
