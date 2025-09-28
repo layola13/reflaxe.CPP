@@ -178,6 +178,16 @@ class Types extends SubCompiler {
 			}
 			#end
 			case TInst(clsRef, params): {
+				// Check for Dynamic in type parameters
+				for(param in params) {
+					switch(param) {
+						case TDynamic(null): {
+							pos.makeError(DynamicUnsupported);
+						}
+						case _:
+					}
+				}
+				
 				switch(clsRef.get()) {
 					// Compile @:const parameter
 					case { kind: KExpr(e) }: {
