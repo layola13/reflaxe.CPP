@@ -91,6 +91,14 @@ class Expressions extends SubCompiler {
 	var trackLinesCallStack: Bool = false;
 	var trackLinesStack: Array<Bool> = [];
 
+	// ----------------------------
+	// Counter for generating unique temporary variable names
+	var __tmpAliasCounter: Int = 0;
+	inline function freshAliasName(prefix: String = "__opt_alias_") {
+		__tmpAliasCounter++;
+		return prefix + Std.string(__tmpAliasCounter);
+	}
+
 	public function pushTrackLines(b: Bool) {
 		trackLinesStack.push(trackLinesCallStack);
 		trackLinesCallStack = b;
@@ -385,9 +393,34 @@ class Expressions extends SubCompiler {
 				result += "\n}";
 			}
 			case TFor(tvar, iterExpr, blockExpr): {
-				result = "for(auto& " + tvar.name + " : " + Main.compileExpressionOrError(iterExpr) + ") {\n";
-				result += toIndentedScope(blockExpr);
-				result += "\n}";
+				// Prefer Haxe's iterator protocol when available (List, Iterator, etc.).
+				final itType = Main.getExprType(iterExpr).unwrapNullTypeOrSelf();
+				var useIteratorProtocol = false;
+				var iteratorExpr: String = null;
+				switch(itType) {
+					case TInst(_.get() => cls, _): {
+						final fullName = cls.module + "." + cls.name;
+						if(fullName == "haxe.ds.List") {
+							useIteratorProtocol = true;
+							// Use iterator() method which handles empty lists properly
+							iteratorExpr = Main.compileExpressionOrError(iterExpr) + "->iterator()";
+						} else if(fullName == "Iterator" || fullName == "KeyValueIterator") {
+							useIteratorProtocol = true;
+							iteratorExpr = Main.compileExpressionOrError(iterExpr);
+						}
+					}
+					case _:
+				}
+
+				if(useIteratorProtocol) {
+					final itVar = "__it" + Std.string(__tmpAliasCounter++);
+					result = '{ auto ${itVar} = ${iteratorExpr};\nwhile(${itVar}->hasNext()) {\n\tauto ${tvar.name} = ${itVar}->next();\n' + toIndentedScope(blockExpr) + '\n}\n}';
+				} else {
+					// Fallback to range-based for (works for std containers)
+					result = "for(auto& " + tvar.name + " : " + Main.compileExpressionOrError(iterExpr) + ") {\n";
+					result += toIndentedScope(blockExpr);
+					result += "\n}";
+				}
 			}
 			case TIf(econd, ifExpr, elseExpr): {
 				result = compileIf(econd, ifExpr, elseExpr);
@@ -730,6 +763,24 @@ class Expressions extends SubCompiler {
 			}
 		}
 
+		// Special-case: converting non-nullable pointer-like to nullable (std::optional)
+		// For shared_ptr, C++ can handle the conversion automatically
+		if(targetType != null && targetType.isNull() && !exprIsNullable) {
+			// Use the source expression's memory model to determine pointer-likeness.
+			final srcMMT = Types.getMemoryManagementTypeFromType(Main.getExprType(expr));
+			// Skip this special case for SharedPtr - let C++ handle it naturally
+			if(srcMMT != SharedPtr) {
+				final pointerLike = (srcMMT != Value || Main.getExprType(expr).isPtr());
+				// Avoid applying to ambiguous generic types (e.g., type parameters),
+				// which may later instantiate to value types like Int.
+				if(pointerLike && !Main.getExprType(expr).isAmbiguousNullable()) {
+					final src = Main.compileExpressionOrError(expr);
+					final tCpp = TComp.compileType(targetType, expr.pos, true);
+					return '(${src} != ${Compiler.PointerNullCpp} ? (${tCpp})${src} : ${Compiler.OptionalNullCpp})';
+				}
+			}
+		}
+
 		// If converting between memory management types AND both are nullable,
 		// the source expression must still be unwrapped for proper conversion.
 		final nullMMConvert = cmmt != tmmt && allowNull && exprIsNullable;
@@ -779,8 +830,12 @@ class Expressions extends SubCompiler {
 					if(cpp != null) {
 						// If we converting between two different memory types that are both nullable,
 						// let's create an alias (new variable) before checking whether a value exists.
-						final hasAlias = nullMMConvert ? addPrefixExpression("auto v = " + cpp) : false;
-						final code = hasAlias ? "v" : cpp;
+						var code = cpp;
+						if(nullMMConvert) {
+							final alias = freshAliasName();
+							final hasAlias = addPrefixExpression('auto ${alias} = ' + cpp);
+							if(hasAlias) code = alias;
+						}
 
 						// Apply memory management conversion
 						var pointerType = cmmt != Value;
@@ -797,7 +852,7 @@ class Expressions extends SubCompiler {
 						if(nullMMConvert) {
 							// If we can successfully add the prefix expression, use `v`.
 							// Otherwise, we have to repeat the `cpp` code when checking for value.
-							final condVar = hasAlias ? "v" : cpp;
+							final condVar = code;
 							final tCpp = TComp.compileType(targetType ?? Main.getExprType(expr), expr.pos, true);
 							result = '${condVar}.has_value() ? (${tCpp})${result} : ${Compiler.OptionalNullCpp}';
 						}
@@ -985,7 +1040,43 @@ class Expressions extends SubCompiler {
 		}
 
 		var cppExpr2 = if(op.isAssign()) {
-			compileExpressionForType(e2, Main.getExprType(e1));
+			final e1Type = Main.getExprType(e1);
+			final e2Type = Main.getExprType(e2);
+			
+			// Special handling for assigning optional<shared_ptr> to optional<shared_ptr>
+			// This happens in List iteration: l = l.value()->next
+			if(e1Type.isNull() && e2Type.isNull()) {
+				// Check if e2 is accessing a field that might be null
+				switch(e2.expr) {
+					case TField(baseExpr, fa): {
+						// Check if we're accessing a 'next' field from an optional
+						final fieldName = switch(fa) {
+							case FInstance(_, _, cfRef): cfRef.get().name;
+							case FAnon(cfRef): cfRef.get().name;
+							case _: null;
+						};
+						
+						if(fieldName == "next") {
+							// This is likely l.value()->next pattern
+							final baseCpp = Main.compileExpressionOrError(baseExpr);
+							// Generate safe assignment for optional types
+							final nextCpp = baseCpp + "->next";
+							nextCpp + " ? std::make_optional(" + nextCpp + ") : std::nullopt";
+						} else {
+							// Normal assignment
+							compileExpressionForType(e2, e1Type);
+						}
+					}
+					case _: {
+						// Normal assignment
+						compileExpressionForType(e2, e1Type);
+					}
+				}
+			} else {
+				// Always use `compileExpressionForType` for assignments to handle
+				// implicit conversions, such as `T` to `std::optional<T>`.
+				compileExpressionForType(e2, e1Type);
+			}
 		} else if(useEnumIndexEquality(e2)) {
 			Main.compileExpressionOrError(e2) + "->index";
 		} else if(op.isEqualityCheck()) {
@@ -1181,11 +1272,29 @@ class Expressions extends SubCompiler {
 	}
 
 	inline function compileForEqualityBinop(e: TypedExpr) {
-		return if(Main.getExprType(e).getMeta().maybeHas(Meta.DirectEquality)) {
-			Main.compileExpressionOrError(e);
-		} else {
-			compileExpressionAsValue(e);
+		// If the type requests direct equality, don't alter
+		if(Main.getExprType(e).getMeta().maybeHas(Meta.DirectEquality)) {
+			return Main.compileExpressionOrError(e);
 		}
+
+		final t = Main.getExprType(e);
+		final unwrapped = t.unwrapNullTypeOrSelf();
+		final mmt = Types.getMemoryManagementTypeFromType(unwrapped);
+
+		// For pointer-like types (raw pointer, shared_ptr, unique_ptr),
+		// equality should compare addresses, not dereferenced values.
+		// If wrapped in std::optional, normalize to a pointer value with value_or(nullptr).
+		if(unwrapped.isPtr() || mmt == SharedPtr || mmt == UniquePtr) {
+			final cpp = Main.compileExpressionOrError(e);
+			return if(t.isNull()) {
+				cpp + ".value_or(" + Compiler.PointerNullCpp + ")";
+			} else {
+				cpp;
+			}
+		}
+
+		// Fallback: compare values
+		return compileExpressionAsValue(e);
 	}
 
 	inline function checkForPrimitiveStringAddition(strExpr: TypedExpr, primExpr: TypedExpr) {
@@ -1804,14 +1913,35 @@ class Expressions extends SubCompiler {
 		for(i in 0...el.length) {
 			final paramExpr = el[i];
 			final cpp = if(funcArgs != null && i < funcArgs.length && funcArgs[i] != null) {
-				// For constructor arguments, if the parameter type is nullable (std::optional)
-				// and the expression is also nullable, we should NOT unwrap it
 				final targetType = funcArgs[i];
-				if(targetType.isNull() && Main.getExprType(paramExpr).isNull()) {
-					// Both are nullable, just compile normally without unwrapping
-					Main.compileExpressionOrError(paramExpr);
+				final sourceType = Main.getExprType(paramExpr);
+				
+				// Check if target expects a pointer type but source is nullable
+				if(!targetType.isNull() && sourceType.isNull()) {
+					// For constructors expecting raw pointers from nullable fields
+					switch(paramExpr.expr) {
+						case TField(e, fa): {
+							final fieldName = switch(fa) {
+								case FInstance(_, _, cfRef): cfRef.get().name;
+								case FAnon(cfRef): cfRef.get().name;
+								case _: null;
+							};
+							// Special handling for List fields
+							if(fieldName == "h" || fieldName == "q") {
+								final baseCpp = Main.compileExpressionOrError(e);
+								final accessOp = isArrowAccessType(Main.getExprType(e)) ? "->" : ".";
+								baseCpp + accessOp + fieldName + ".has_value() ? " +
+								baseCpp + accessOp + fieldName + ".value() : nullptr";
+							} else {
+								compileExpressionForType(paramExpr, targetType);
+							}
+						}
+						case _: {
+							compileExpressionForType(paramExpr, targetType);
+						}
+					}
 				} else {
-					// Use normal type conversion
+					// Normal case: use type conversion
 					compileExpressionForType(paramExpr, targetType);
 				}
 			} else {
@@ -1882,8 +2012,41 @@ class Expressions extends SubCompiler {
 
 	// Compiles if statement (TIf).
 	function compileIf(econd: TypedExpr, ifExpr: TypedExpr, elseExpr: Null<TypedExpr>, constexpr: Bool = false): String {
-		final nullableBoolT = TAbstract(Main.getNullType(), [Context.getType("Bool")]);
-		var result = "if" + (constexpr ? " constexpr" : "") + "(" + XComp.compileExpressionForType(econd.unwrapParenthesis(), nullableBoolT) + ") {\n";
+		// Special handling for null comparisons in conditions
+		final condExpr = econd.unwrapParenthesis();
+		
+		// Check if this is a null comparison (prev == null or similar)
+		final condCpp = switch(condExpr.expr) {
+			case TBinop(OpEq, { expr: TConst(TNull) }, e) | TBinop(OpEq, e, { expr: TConst(TNull) }): {
+				final eCpp = Main.compileExpressionOrError(e);
+				final eType = Main.getExprType(e);
+				// For pointer types, compare with nullptr
+				if(eType.isPtr() || Types.getMemoryManagementTypeFromType(eType) != Value) {
+					"(" + eCpp + " == " + Compiler.PointerNullCpp + ")";
+				} else {
+					// For optional types, use has_value()
+					"!" + eCpp + ".has_value()";
+				}
+			}
+			case TBinop(OpNotEq, { expr: TConst(TNull) }, e) | TBinop(OpNotEq, e, { expr: TConst(TNull) }): {
+				final eCpp = Main.compileExpressionOrError(e);
+				final eType = Main.getExprType(e);
+				// For pointer types, compare with nullptr
+				if(eType.isPtr() || Types.getMemoryManagementTypeFromType(eType) != Value) {
+					"(" + eCpp + " != " + Compiler.PointerNullCpp + ")";
+				} else {
+					// For optional types, use has_value()
+					eCpp + ".has_value()";
+				}
+			}
+			case _: {
+				// Default: compile as Null<Bool>
+				final nullableBoolT = TAbstract(Main.getNullType(), [Context.getType("Bool")]);
+				XComp.compileExpressionForType(condExpr, nullableBoolT);
+			}
+		}
+		
+		var result = "if" + (constexpr ? " constexpr" : "") + "(" + condCpp + ") {\n";
 		result += toIndentedScope(ifExpr);
 		if(elseExpr != null) {
 			switch(elseExpr.expr) {

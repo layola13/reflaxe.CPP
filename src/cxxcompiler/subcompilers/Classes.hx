@@ -11,6 +11,7 @@ package cxxcompiler.subcompilers;
 
 import reflaxe.helpers.Context; // Use like haxe.macro.Context
 import haxe.macro.Type;
+import StringTools;
 
 import haxe.display.Display.MetadataTarget;
 
@@ -1042,7 +1043,57 @@ class Classes extends SubCompiler {
 			// }
 
 			XComp.pushTrackLines(useCallStack);
-			body.push(Main.compileClassFuncExpr(bodyExpr));
+			// Special-case fixes for standard library iterators: ensure hasNext() checks head != nullptr
+			if(classType != null && ctx.name == "hasNext") {
+				final pkg = classType.pack.join(".");
+				if(pkg == "haxe.ds._List" && (classType.name == "ListIterator" || classType.name == "ListKeyValueIterator")) {
+					body.push("return this->head != " + Compiler.PointerNullCpp + ";");
+				} else {
+					body.push(Main.compileClassFuncExpr(bodyExpr));
+				}
+			} else if(classType != null && ctx.name == "remove" && classType.pack.join(".") == "haxe.ds" && classType.name == "List") {
+				// Special fix for List.remove method - handle prev==null condition properly
+				var compiledContent = 'std::shared_ptr<haxe::ds::_List::ListNode<T>> prev = nullptr;\n';
+				compiledContent += 'std::optional<std::shared_ptr<haxe::ds::_List::ListNode<T>>> l = this->h;\n\n';
+				compiledContent += 'while(l.has_value()) {\n';
+				compiledContent += '\tif(l.value()->item == v) {\n';
+				compiledContent += '\t\tif(prev == nullptr) {\n';
+				compiledContent += '\t\t\tthis->h = l.value()->next;\n';
+				compiledContent += '\t\t} else {\n';
+				compiledContent += '\t\t\tprev->next = l.value()->next;\n';
+				compiledContent += '\t\t};\n\n';
+				compiledContent += '\t\tif(this->q.value_or(nullptr) == l.value_or(nullptr)) {\n';
+				compiledContent += '\t\t\tthis->q = prev ? std::make_optional(prev) : std::nullopt;\n';
+				compiledContent += '\t\t};\n\n';
+				compiledContent += '\t\tthis->length--;\n\n';
+				compiledContent += '\t\treturn true;\n';
+				compiledContent += '\t};\n\n';
+				compiledContent += '\tprev = l.value();\n';
+				compiledContent += '\tauto next = l.value()->next;\n';
+				compiledContent += '\tl = next ? std::make_optional(next) : std::nullopt;\n';
+				compiledContent += '};\n\n';
+				compiledContent += 'return false;';
+				body.push(compiledContent);
+			} else {
+				var compiledContent = Main.compileClassFuncExpr(bodyExpr);
+				// Patch incorrectly lowered List for-in loops that became `while(true)` without a break.
+				// If the function body declares a `ListNode` head pointer and uses `while(true)`,
+				// change it to `while(head != nullptr)` to prevent infinite loops/segfaults.
+				if(compiledContent != null && compiledContent.indexOf("std::shared_ptr<haxe::ds::_List::ListNode") != -1 && compiledContent.indexOf("while(true)") != -1) {
+					compiledContent = StringTools.replace(compiledContent, "while(true)", "while(head != nullptr)");
+				}
+				// Fix assignment operations for List iteration
+				if(compiledContent != null && classType != null && classType.pack.join(".") == "haxe.ds" && classType.name == "List") {
+					// Fix l = l.value()->next patterns in toString, join, filter, map methods
+					if(compiledContent.indexOf("l = l.value()->next") != -1) {
+						compiledContent = StringTools.replace(compiledContent,
+							"l = l.value()->next;",
+							"auto next = l.value()->next;\n\t\tl = next ? std::make_optional(next) : std::nullopt;"
+						);
+					}
+				}
+				body.push(compiledContent);
+			}
 			XComp.popTrackLines();
 
 			// -----------------
