@@ -1092,9 +1092,13 @@ class Classes extends SubCompiler {
 				// Patch for MainLoop::sortEvents to prevent null pointer access
 				// Check if this is the sortEvents method of the MainLoop class
 				if(compiledContent != null && ctx.f.field.name == "sortEvents" && classType.module == "haxe.MainLoop") {
-					// Add null checks before accessing tail->next and list->prev
-					compiledContent = StringTools.replace(compiledContent, "tail->next = nullptr", "if(tail != nullptr) {\n\t\ttail->next = nullptr;\n\t}");
-					compiledContent = StringTools.replace(compiledContent, "list->prev = nullptr", "if(list != nullptr) {\n\t\tlist->prev = nullptr;\n\t}");
+					// Add null checks for tail pointer access
+					compiledContent = StringTools.replace(compiledContent, "tail->next = e;", "if(tail != nullptr) {\n\t\t\t\ttail->next = e;\n\t\t\t}");
+					compiledContent = StringTools.replace(compiledContent, "e->prev = tail;", "if(tail != nullptr) {\n\t\t\t\te->prev = tail;\n\t\t\t}");
+					
+					// Add null checks for list operations
+					compiledContent = StringTools.replace(compiledContent, "tail->next = nullptr", "if(tail != nullptr) {\n\t\t\ttail->next = nullptr;\n\t\t}");
+					compiledContent = StringTools.replace(compiledContent, "list->prev = nullptr", "if(list != nullptr) {\n\t\t\tlist->prev = nullptr;\n\t\t}");
 				}
 				// Fix assignment operations for List iteration
 				if(compiledContent != null && classType != null && classType.pack.join(".") == "haxe.ds" && classType.name == "List") {
