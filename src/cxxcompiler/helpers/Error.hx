@@ -36,6 +36,8 @@ enum ErrorType {
 	CannotCompileNullType;
 	DynamicUnsupported;
 	MapWithDynamicNotSupported;
+	MapWithAnyNotSupported;
+	AnyTypeNotSupported;
 	UntypedNotSupported;
 	OMMIncorrectParamCount;
 	ValueSelfRef;

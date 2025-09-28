@@ -20,18 +20,46 @@ struct DynamicToString: public std::string {
 
     template<typename T>
     static std::string ToString(T s) {
-		if constexpr(std::is_pointer<T>::value) {
-			if(s == nullptr) {
-				return \"nullptr\";
-			}
-		}
+  if constexpr(std::is_pointer<T>::value) {
+   if(s == nullptr) {
+    return \"nullptr\";
+   }
+  }
         if constexpr(haxe::optional_info<T>::isopt) {
-			if(s.has_value()) {
-				return ToString(s.value());
-			} else {
-				return \"null\";
-			}
-		} else if constexpr(std::is_same_v<T, bool>) {
+   if(s.has_value()) {
+    return ToString(s.value());
+   } else {
+    return \"null\";
+   }
+  } else if constexpr(std::is_same_v<T, std::any>) {
+   // Handle std::any type
+   try {
+    // Try to cast to common types and return their string representation
+    if (s.type() == typeid(int)) {
+    	return std::to_string(std::any_cast<int>(s));
+    } else if (s.type() == typeid(double)) {
+    	return std::to_string(std::any_cast<double>(s));
+    } else if (s.type() == typeid(float)) {
+    	return std::to_string(std::any_cast<float>(s));
+    } else if (s.type() == typeid(std::string)) {
+    	return std::any_cast<std::string>(s);
+    } else if (s.type() == typeid(bool)) {
+    	return std::any_cast<bool>(s) ? \"true\" : \"false\";
+    } else if (s.type() == typeid(std::optional<std::any>)) {
+    	// Special case: the any contains an optional<any> (this shouldn't happen normally)
+    	auto opt = std::any_cast<std::optional<std::any>>(s);
+    	if (opt.has_value()) {
+    		return ToString(opt.value());
+    	} else {
+    		return \"null\";
+    	}
+    } else {
+    	return \"<Any(\" + std::string(s.type().name()) + \")>\";
+    }
+   } catch (const std::bad_any_cast& e) {
+    return \"<Any(\" + std::string(s.type().name()) + \")>\";
+   }
+  } else if constexpr(std::is_same_v<T, bool>) {
 			return s ? \"true\" : \"false\";
 		} else if constexpr(std::is_integral_v<T> || std::is_floating_point_v<T>) {
 			return std::to_string(s);
@@ -68,6 +96,8 @@ struct DynamicToString: public std::string {
 @:headerInclude("string", true)
 @:headerInclude("sstream", true)
 @:headerInclude("utility", true)
+@:headerInclude("any", true)
+@:headerInclude("typeinfo", true)
 @:includeAnonUtils(true)
 @:native("haxe::DynamicToString")
 @:yesInclude

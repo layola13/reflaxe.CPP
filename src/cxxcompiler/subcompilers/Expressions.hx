@@ -1794,11 +1794,25 @@ class Expressions extends SubCompiler {
 				case _: null;
 			} else null;
 
+			// Special handling for Std.string with Null<Any> arguments
+			var isStdStringCall = false;
+			switch(callExpr.getFieldAccess(true)) {
+				case FStatic(clsRef, cfRef): {
+					final cls = clsRef.get();
+					final cf = cfRef.get();
+					// Check if this is Std.string
+					if(cls.name == "Std" && cf.name == "string") {
+						isStdStringCall = true;
+					}
+				}
+				case _:
+			}
+
 			// Compile the arguments
 			var cppArgs = [];
 			for(i in 0...el.length) {
 				final paramExpr = el[i];
-				final cpp = if(funcArgTypes != null && i < funcArgTypes.length && funcArgTypes[i] != null) {
+				var cpp = if(funcArgTypes != null && i < funcArgTypes.length && funcArgTypes[i] != null) {
 					compileExpressionForType(paramExpr, funcArgTypes[i]);
 				} else {
 					Main.compileExpressionOrError(paramExpr);
@@ -1807,6 +1821,30 @@ class Expressions extends SubCompiler {
 				if(cpp == null) {
 					paramExpr.pos.makeError(CouldNotCompileExpression(paramExpr));
 					continue;
+				}
+
+				// Special handling for Std.string with Null<Any> type
+				if(isStdStringCall && i == 0) {
+					final paramType = Main.getExprType(paramExpr);
+					// Check if the parameter is Null<Any> (std::optional<std::any>)
+					if(paramType.isNull()) {
+						switch(paramType) {
+							case TAbstract(aRef, params) if(params.length == 1): {
+								// Check if it's Null<Any>
+								switch(params[0]) {
+									case TAbstract(innerRef, []): {
+										if(innerRef.get().name == "Any" && innerRef.get().module == "Any") {
+											// This is Null<Any>, we need to unwrap it properly
+											// The generated code should pass tmp.value() instead of tmp
+											// But since DynamicToString handles optionals, we don't need to do anything special here
+										}
+									}
+									case _:
+								}
+							}
+							case _:
+						}
+					}
 				}
 
 				// Check if the argument has @:templateArg
