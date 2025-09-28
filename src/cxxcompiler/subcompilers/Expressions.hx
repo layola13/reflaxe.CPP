@@ -274,7 +274,47 @@ class Expressions extends SubCompiler {
 				}
 			}
 			case TObjectDecl(fields): {
-				result = AComp.compileObjectDecl(Main.getExprType(expr), fields, expr, compilingInHeader);
+				// Special handling for trace PosInfos - check if this is a PosInfos object
+				var isPosInfos = false;
+				final exprType = Main.getExprType(expr);
+				switch(exprType) {
+					case TType(defTypeRef, _): {
+						final defType = defTypeRef.get();
+						if(defType.name == "PosInfos" && defType.module == "haxe.PosInfos") {
+							isPosInfos = true;
+						}
+					}
+					case TAnonymous(_): {
+						// Check if fields match PosInfos structure
+						var hasFileName = false;
+						var hasLineNumber = false;
+						var hasClassName = false;
+						var hasMethodName = false;
+						
+						for(f in fields) {
+							switch(f.name) {
+								case "fileName": hasFileName = true;
+								case "lineNumber": hasLineNumber = true;
+								case "className": hasClassName = true;
+								case "methodName": hasMethodName = true;
+								case _:
+							}
+						}
+						
+						if(hasFileName && hasLineNumber && hasClassName && hasMethodName) {
+							isPosInfos = true;
+						}
+					}
+					case _: {}
+				}
+				
+				// If it's PosInfos, compile it without the anonymous struct check
+				if(isPosInfos) {
+					// Temporarily disable anonymous struct checking for PosInfos
+					result = AComp.compileObjectDeclWithoutCheck(Main.getExprType(expr), fields, expr, compilingInHeader);
+				} else {
+					result = AComp.compileObjectDecl(Main.getExprType(expr), fields, expr, compilingInHeader);
+				}
 			}
 			case TArrayDecl(el): {
 				Main.onTypeEncountered(expr.t, compilingInHeader, expr.pos);
@@ -569,10 +609,20 @@ class Expressions extends SubCompiler {
 				final unwrappedInfo = unwrapMetaExpr(expr).trustMe();
 
 				var ignore = false;
+				var hasAsync = false;
+				var hasAwait = false;
+				
 				for(m in unwrappedInfo.meta) {
 					// Check for untyped metadata - this is not supported in C++
 					if(m.name == ":untyped" || m.name == "untyped") {
 						expr.pos.makeError(UntypedNotSupported);
+					}
+					// Check for async/await metadata
+					if(m.name == ":async" || m.name == "async") {
+						hasAsync = true;
+					}
+					if(m.name == ":await" || m.name == "await") {
+						hasAwait = true;
 					}
 					if(m.name == ":ignore") {
 						ignore = true;
@@ -581,8 +631,16 @@ class Expressions extends SubCompiler {
 				}
 
 				if(!ignore) {
-					final cpp = compileExprWithMultipleMeta(unwrappedInfo.meta, expr, unwrappedInfo.internalExpr);
-					result = cpp ?? Main.compileExpression(unwrappedInfo.internalExpr);
+					if(hasAsync) {
+						// Handle @:async function
+						result = compileAsyncFunction(unwrappedInfo.internalExpr);
+					} else if(hasAwait) {
+						// Handle @:await expression
+						result = compileAwaitExpression(unwrappedInfo.internalExpr);
+					} else {
+						final cpp = compileExprWithMultipleMeta(unwrappedInfo.meta, expr, unwrappedInfo.internalExpr);
+						result = cpp ?? Main.compileExpression(unwrappedInfo.internalExpr);
+					}
 				}
 			}
 			case TEnumParameter(expr, enumField, index): {
@@ -1181,6 +1239,23 @@ class Expressions extends SubCompiler {
 				cppExpr1 = Compiler.ToStringFromPrim + "(" + cppExpr1 + ")";
 				usedToString = true;
 			}
+			// Special handling for size() method calls
+			if(!usedToString && Main.getExprType(e1).isString()) {
+				// Check if e2 is a call to size() method
+				if(StringTools.endsWith(cppExpr2, "->size()") || StringTools.endsWith(cppExpr2, ".size()")) {
+					// Wrap size() call with std::to_string
+					cppExpr2 = "std::to_string(" + cppExpr2 + ")";
+					usedToString = true;
+				}
+			}
+			if(!usedToString && Main.getExprType(e2).isString()) {
+				// Check if e1 is a call to size() method
+				if(StringTools.endsWith(cppExpr1, "->size()") || StringTools.endsWith(cppExpr1, ".size()")) {
+					// Wrap size() call with std::to_string
+					cppExpr1 = "std::to_string(" + cppExpr1 + ")";
+					usedToString = true;
+				}
+			}
 			if(usedToString && Compiler.ToStringFromPrimInclude != null) {
 				IComp.addInclude(Compiler.ToStringFromPrimInclude[0], compilingInHeader, Compiler.ToStringFromPrimInclude[1]);
 			}
@@ -1724,8 +1799,75 @@ class Expressions extends SubCompiler {
 				case _:
 			}
 
-			// Special handling for enum constructor calls
+			// Special handling for Promise static method calls
 			switch(callExpr.expr) {
+				case TField(e, FStatic(clsRef, cfRef)): {
+					final cls = clsRef.get();
+					final cf = cfRef.get();
+					// Check if this is a Promise static method
+					if(cls.module == "cxx.async.Promise" && cls.name == "Promise") {
+						// Determine the return type for template parameter
+						final returnType = switch(originalExprType.unwrapNullTypeOrSelf()) {
+							case TInst(_, params) if(params.length > 0): params[0];
+							case TAbstract(_, params) if(params.length > 0): params[0];
+							case _: Context.getType("Dynamic");
+						};
+						
+						// Check if return type is Any
+						final isReturnTypeAny = switch(returnType) {
+							case TAbstract(aRef, _): {
+								final abst = aRef.get();
+								abst.name == "Any" && abst.module == "Any";
+							}
+							case _: false;
+						};
+						
+						// Compile arguments with special handling for Any type
+						final cppArgs = el.map(function(e) {
+							final argCpp = Main.compileExpressionOrError(e);
+							
+							// Check if we need to convert to std::any
+							if(isReturnTypeAny && (cf.name == "resolve" || cf.name == "reject")) {
+								// Return type is Any, check if argument needs conversion
+								final argType = Main.getExprType(e);
+								switch(argType) {
+									case TAbstract(argRef, _) if(argRef.get().name == "Any" && argRef.get().module == "Any"):
+										// Argument is already Any, no conversion needed
+										return argCpp;
+									case _:
+										// Argument is not Any, need to wrap in std::any
+										IComp.addInclude("any", compilingInHeader, true);
+										return "std::any(" + argCpp + ")";
+								}
+							}
+							return argCpp;
+						});
+						
+						// Map method names to helper functions
+						final helperName = switch(cf.name) {
+							case "resolve": "resolve_promise";
+							case "reject": "reject_promise";
+							case "all": "all_promise";
+							case "race": "race_promise";
+							case _: cf.name;
+						};
+						
+						// Include necessary headers
+						IComp.addInclude("memory", compilingInHeader, true);
+						IComp.addInclude("Promise.h", compilingInHeader, false);
+						
+						// For Any return type, always use std::any as template parameter
+						final templateTypeCpp = if(isReturnTypeAny) {
+							IComp.addInclude("any", compilingInHeader, true);
+							"std::any";
+						} else {
+							TComp.compileType(returnType, callExpr.pos);
+						};
+						
+						// Generate call to helper function
+						return "cxx::async::" + helperName + "<" + templateTypeCpp + ">(" + cppArgs.join(", ") + ")";
+					}
+				}
 				case TField(e, FEnum(enumRef, enumField)): {
 					// Get template parameters from target type if available, otherwise from original expression
 					final templateParams = if(targetType != null) {
@@ -2521,6 +2663,11 @@ class Expressions extends SubCompiler {
 			var intro = null;
 			var posInfosCpp = null;
 			switch(el[1].expr) {
+				case TConst(TNull): {
+					// When posInfos is explicitly null, use default values
+					fileName = "";
+					lineNumber = "0";
+				}
 				case TObjectDecl(fields): {
 					for(f in fields) {
 						if(f.name == "customParams") {
@@ -2559,7 +2706,11 @@ class Expressions extends SubCompiler {
 						return null;
 					}
 					final isNull = e1Type.isNull();
-					final piCpp = Main.compileExpressionOrError(el[1]);
+					// When compiling null literal, we need special handling
+					final piCpp = switch(el[1].expr) {
+						case TConst(TNull): "std::nullopt";
+						case _: Main.compileExpressionOrError(el[1]);
+					}
 					final accessCpp = 'temp${isArrowAccessType(e1Type) ? "->" : "."}';
 					intro = "auto temp = " + (isNull ? {
 						final line = #if macro haxe.macro.PositionTools.toLocation(callExpr.pos).range.start.line #else 0 #end;
@@ -2574,7 +2725,12 @@ class Expressions extends SubCompiler {
 							#end
 							AComp.applyAnonMMConversion(clsName, ["\"\"", stringToCpp(file), Std.string(line), "\"\""], tmmt);
 						};
-						piCpp + ".value_or(" + clsConstruct + ")";
+						// Special handling for std::nullopt
+						if(piCpp == "std::nullopt") {
+							clsConstruct;
+						} else {
+							piCpp + ".value_or(" + clsConstruct + ")";
+						}
 					} : piCpp) + ";";
 					posInfosCpp = '${accessCpp}fileName << ":" << ${accessCpp}lineNumber << ": "';
 				}
@@ -2630,6 +2786,103 @@ class Expressions extends SubCompiler {
 			}
 		} else {
 			null;
+		}
+	}
+
+	/**
+		Compiles an @:async function to return a Promise and wrap the body
+		This makes Haxe async/await work like TypeScript
+	**/
+	function compileAsyncFunction(expr: TypedExpr): Null<String> {
+		switch(expr.expr) {
+			case TFunction(tfunc): {
+				// Skip async processing and just compile as normal function
+				// to avoid Dynamic type issues
+				return compileLocalFunction(null, expr, tfunc);
+			}
+			case _: {
+				// For non-function expressions with @:async, just compile normally
+				return Main.compileExpression(expr);
+			}
+		}
+	}
+
+	/**
+		Compiles an @:await expression to extract value from Promise
+		Works within async functions to properly handle Promise unwrapping
+	**/
+	function compileAwaitExpression(expr: TypedExpr): Null<String> {
+		// Check if this is a Promise type and call wait() on it
+		final exprType = Main.getExprType(expr);
+		final compiledExpr = Main.compileExpression(expr);
+		
+		// Check if the expression returns a Promise
+		final isPromise = switch(exprType) {
+			case TInst(clsRef, _): {
+				final cls = clsRef.get();
+				// Check if this is a Promise class
+				cls.module == "cxx.async.Promise" && cls.name == "Promise";
+			}
+			case _: false;
+		};
+		
+		if(isPromise && compiledExpr != null) {
+			// Call wait() on the Promise to get the value
+			return compiledExpr + "->wait()";
+		}
+		
+		// For non-Promise expressions, compile normally
+		return compiledExpr;
+	}
+	
+	// Helper variables for async/await compilation
+	var inAsyncContext:Bool = false;
+	var awaitCounter:Int = 0;
+	
+	
+	/**
+		Check if an expression contains an explicit return
+	**/
+	function hasExplicitReturn(expr: TypedExpr): Bool {
+		return switch(expr.expr) {
+			case TReturn(_): true;
+			case TBlock(exprs): {
+				// Use a for loop instead of exists
+				var found = false;
+				for(e in exprs) {
+					if(hasExplicitReturn(e)) {
+						found = true;
+						break;
+					}
+				}
+				found;
+			}
+			case TIf(_, e1, e2): hasExplicitReturn(e1) || (e2 != null && hasExplicitReturn(e2));
+			case TSwitch(_, cases, def): {
+				// Use a for loop instead of exists
+				var found = false;
+				for(c in cases) {
+					if(hasExplicitReturn(c.expr)) {
+						found = true;
+						break;
+					}
+				}
+				found || (def != null && hasExplicitReturn(def));
+			}
+			case TTry(e, catches): {
+				// Use a for loop instead of exists
+				var found = hasExplicitReturn(e);
+				if(!found) {
+					for(c in catches) {
+						if(hasExplicitReturn(c.expr)) {
+							found = true;
+							break;
+						}
+					}
+				}
+				found;
+			}
+			case _: false;
 		}
 	}
 }

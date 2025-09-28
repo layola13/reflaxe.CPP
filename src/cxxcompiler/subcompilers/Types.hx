@@ -188,6 +188,19 @@ class Types extends SubCompiler {
 					}
 				}
 				
+				// Special handling for Promise type
+				final cls = clsRef.get();
+				if(cls.module == "cxx.async.Promise" && cls.name == "Promise") {
+					// Promise should be compiled as shared_ptr<PromiseImpl<T>>
+					// Also ensure memory header is included for shared_ptr
+					IComp.addInclude("memory", true, true);
+					IComp.addInclude("cxx_async_Promise.h", true, false);
+					if(params.length == 1) {
+						final innerType = compileType(params[0], pos);
+						return "std::shared_ptr<cxx::async::PromiseImpl<" + innerType + ">>";
+					}
+				}
+				
 				switch(clsRef.get()) {
 					// Compile @:const parameter
 					case { kind: KExpr(e) }: {
@@ -237,8 +250,10 @@ class Types extends SubCompiler {
 			}
 			case TDynamic(t3): {
 				if(t3 == null) {
-					// Dynamic type is not supported - always throw an error
-					pos.makeError(DynamicUnsupported);
+					// Convert Dynamic to Any for better C++ compatibility
+					// This allows async functions and other features to work
+					IComp.addInclude("any", true, true);
+					"std::any";
 				} else {
 					compileType(t3, pos, asValue);
 				}

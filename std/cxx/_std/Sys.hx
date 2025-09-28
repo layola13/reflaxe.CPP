@@ -101,24 +101,24 @@ final class Sys_GetEnv {
 		var libvar: cxx.Ptr<cxx.Char> = cast 0;
 		var requiredSize: cxx.num.SizeT = 0;
 
-		// Check if exists
-		cxx.Stdlib.getEnv(requiredSize, untyped __cpp__("nullptr"), 0, @:privateAccess s.c_str());
+		// Check if exists - pass requiredSize as a pointer
+		cxx.Stdlib.getEnv(untyped __cpp__("&{0}", requiredSize), untyped __cpp__("nullptr"), 0, @:privateAccess s.c_str());
 		if(requiredSize == 0) return null;
 
 		// If it does, `requiredSize` contains the allocation size.
 		// Allocate a `char*` of size `requiredSize`.
 		libvar = cxx.Stdlib.ccast(cxx.Stdlib.malloc(requiredSize * cxx.Stdlib.sizeof(untyped __cpp__("char"))));
 
-		// Get the variable
-		cxx.Stdlib.getEnv(requiredSize, libvar, requiredSize, @:privateAccess s.c_str());
+		// Get the variable - pass requiredSize as a pointer for the first argument
+		cxx.Stdlib.getEnv(untyped __cpp__("&{0}", requiredSize), libvar, requiredSize, @:privateAccess s.c_str());
 
 		// Convert the `char*` to `std::string`, free it, then return the string.
 		final str: String = libvar.toString();
 		cxx.Stdlib.free(libvar);
 		return str;
 		#else
-		final result = cxx.Stdlib.getEnv(@:privateAccess s.c_str());
-		return result.isNull() ? null : result.toString();
+		final result = untyped __cpp__("std::getenv({0})", @:privateAccess s.c_str());
+		return if(result == untyped __cpp__("nullptr")) null else untyped __cpp__("std::string({0})", result);
 		#end
 	}
 }

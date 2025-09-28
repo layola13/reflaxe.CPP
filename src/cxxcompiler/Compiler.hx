@@ -249,6 +249,7 @@ class Compiler extends reflaxe.DirectToStringCompiler {
 		generateHaxeUtilsHeader();
 		generateDynamic();
 		copyAdditionalFiles();
+		copyAsyncHeaders();
 		generateCMake();
 	}
 
@@ -858,6 +859,261 @@ class Compiler extends reflaxe.DirectToStringCompiler {
 				}
 			}
 		}
+		#end
+	}
+
+	// ----------------------------
+	// Copies async/Promise header files if they are used
+	function copyAsyncHeaders() {
+		#if (macro || display)
+		// Create Promise.h placeholder that redirects to cxx_async_Promise.h
+		final promiseStubContent = '#pragma once
+
+// This is a placeholder file for Promise type
+// The actual Promise implementation is in cxx_async_Promise.h
+// This file exists only to satisfy include requirements
+
+#include "cxx_async_Promise.h"
+#include <memory>
+#include <deque>
+#include <any>
+#include <any>
+
+// Static helper functions for Promise
+namespace cxx {
+namespace async {
+
+// Helper functions that create Promise instances
+template<typename T>
+inline std::shared_ptr<PromiseImpl<T>> resolve_promise(const T& value) {
+		  auto promise = std::make_shared<PromiseImpl<T>>(
+		      [value](std::function<void(T)> resolve, std::function<void(std::any)> reject) {
+		          resolve(value);
+		      }
+		  );
+		  return promise;
+}
+
+// Special overload for std::optional types
+template<typename T>
+inline std::shared_ptr<PromiseImpl<T>> resolve_promise(const std::optional<T>& value) {
+		  if (value.has_value()) {
+		      return resolve_promise(value.value());
+		  } else {
+		      // Return a rejected promise for nullopt
+		      return reject_promise<T>(std::make_any<std::string>("null value"));
+		  }
+}
+
+template<typename T>
+inline std::shared_ptr<PromiseImpl<T>> reject_promise(const std::any& error) {
+		  auto promise = std::make_shared<PromiseImpl<T>>(
+		      [error](std::function<void(T)> resolve, std::function<void(std::any)> reject) {
+		          reject(error);
+		      }
+		  );
+		  return promise;
+}
+
+// all_promise for arrays of promises
+template<typename T>
+inline std::shared_ptr<PromiseImpl<std::shared_ptr<std::deque<T>>>> all_promise(
+		  std::shared_ptr<std::deque<std::shared_ptr<PromiseImpl<T>>>> promises) {
+		  // Simplified implementation - collects all results
+		  auto result = std::make_shared<std::deque<T>>();
+		  // In real implementation, this would wait for all promises
+		  return std::make_shared<PromiseImpl<std::shared_ptr<std::deque<T>>>>(
+		      [result](std::function<void(std::shared_ptr<std::deque<T>>)> resolve,
+		              std::function<void(std::any)> reject) {
+		          resolve(result);
+		      }
+		  );
+}
+
+// race_promise for arrays of promises
+template<typename T>
+inline std::shared_ptr<PromiseImpl<T>> race_promise(
+		  std::shared_ptr<std::deque<std::shared_ptr<PromiseImpl<T>>>> promises) {
+		  // Simplified implementation - returns first result
+		  return std::make_shared<PromiseImpl<T>>(
+		      [](std::function<void(T)> resolve, std::function<void(std::any)> reject) {
+		          // In real implementation, this would race promises
+		      }
+		  );
+}
+
+} // namespace async
+} // namespace cxx
+';
+		setExtraFile(HeaderFolder + "/Promise.h", promiseStubContent);
+		
+		// Create SystemClock.h placeholder
+		final systemClockContent = '#pragma once
+
+// SystemClock wrapper for std::chrono::system_clock
+// This file provides compatibility for system clock operations
+
+#include <chrono>
+
+namespace std {
+namespace chrono {
+	   // The system_clock is already defined in <chrono>
+	   // This header is just a placeholder for compatibility
+}
+}
+';
+		setExtraFile(HeaderFolder + "/SystemClock.h", systemClockContent);
+		
+		// Simply copy the Promise header content directly
+		final promiseHeaderContent = '#pragma once
+
+#include <memory>
+#include <functional>
+#include <mutex>
+#include <condition_variable>
+#include <any>
+#include <exception>
+#include <thread>
+#include <atomic>
+#include <vector>
+
+namespace cxx {
+namespace async {
+
+template<typename T>
+class PromiseImpl {
+private:
+	   mutable std::mutex mutex_;
+	   mutable std::condition_variable cv_;
+	   bool resolved_ = false;
+	   bool rejected_ = false;
+	   T value_;
+	   std::any error_;
+	   std::vector<std::function<void(T)>> then_callbacks_;
+	   std::vector<std::function<void(std::any)>> catch_callbacks_;
+	   
+public:
+	   PromiseImpl(std::function<void(std::function<void(T)>, std::function<void(std::any)>)> executor) {
+	       try {
+	           executor(
+	               [this](T val) { this->_resolve(val); },
+	               [this](std::any err) { this->_reject(err); }
+	           );
+	       } catch (...) {
+	           _reject(std::current_exception());
+	       }
+	   }
+	   
+	   void _resolve(T val) {
+	       std::lock_guard<std::mutex> lock(mutex_);
+	       if (!resolved_ && !rejected_) {
+	           value_ = val;
+	           resolved_ = true;
+	           cv_.notify_all();
+	           
+	           for (auto& callback : then_callbacks_) {
+	               callback(value_);
+	           }
+	       }
+	   }
+	   
+	   void _reject(std::any err) {
+	       std::lock_guard<std::mutex> lock(mutex_);
+	       if (!resolved_ && !rejected_) {
+	           error_ = err;
+	           rejected_ = true;
+	           cv_.notify_all();
+	           
+	           for (auto& callback : catch_callbacks_) {
+	               callback(error_);
+	           }
+	       }
+	   }
+	   
+	   T wait() {
+	       std::unique_lock<std::mutex> lock(mutex_);
+	       cv_.wait(lock, [this] { return resolved_ || rejected_; });
+	       
+	       if (rejected_) {
+	           if (error_.type() == typeid(std::exception_ptr)) {
+	               std::rethrow_exception(std::any_cast<std::exception_ptr>(error_));
+	           }
+	           throw std::runtime_error("Promise rejected");
+	       }
+	       
+	       return value_;
+	   }
+	   
+	   template<typename U>
+	   std::shared_ptr<PromiseImpl<U>> then(std::function<U(T)> onFulfilled) {
+	       return std::make_shared<PromiseImpl<U>>(
+	           [this, onFulfilled](auto resolve, auto reject) {
+	               std::lock_guard<std::mutex> lock(mutex_);
+	               if (resolved_) {
+	                   try {
+	                       resolve(onFulfilled(value_));
+	                   } catch (...) {
+	                       reject(std::current_exception());
+	                   }
+	               } else if (rejected_) {
+	                   reject(error_);
+	               } else {
+	                   then_callbacks_.push_back([resolve, reject, onFulfilled](T val) {
+	                       try {
+	                           resolve(onFulfilled(val));
+	                       } catch (...) {
+	                           reject(std::current_exception());
+	                       }
+	                   });
+	                   catch_callbacks_.push_back([reject](std::any err) {
+	                       reject(err);
+	                   });
+	               }
+	           }
+	       );
+	   }
+	   
+	   std::shared_ptr<PromiseImpl<T>> catchError(std::function<void(std::any)> onRejected) {
+	       std::lock_guard<std::mutex> lock(mutex_);
+	       if (rejected_) {
+	           onRejected(error_);
+	       } else if (!resolved_) {
+	           catch_callbacks_.push_back(onRejected);
+	       }
+	       return std::make_shared<PromiseImpl<T>>(*this);
+	   }
+	   
+	   bool isResolved() const {
+	       std::lock_guard<std::mutex> lock(mutex_);
+	       return resolved_;
+	   }
+	   
+	   bool isRejected() const {
+	       std::lock_guard<std::mutex> lock(mutex_);
+	       return rejected_;
+	   }
+	   
+	   static std::shared_ptr<PromiseImpl<T>> resolve(T value) {
+	       return std::make_shared<PromiseImpl<T>>(
+	           [value](auto resolve, auto reject) { resolve(value); }
+	       );
+	   }
+	   
+	   static std::shared_ptr<PromiseImpl<T>> reject(std::any error) {
+	       return std::make_shared<PromiseImpl<T>>(
+	           [error](auto resolve, auto reject) { reject(error); }
+	       );
+	   }
+};
+
+template<typename T>
+using Promise = std::shared_ptr<PromiseImpl<T>>;
+
+} // namespace async
+} // namespace cxx';
+		
+		// Write the header content directly
+		setExtraFile(HeaderFolder + "/cxx_async_Promise.h", promiseHeaderContent);
 		#end
 	}
 

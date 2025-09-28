@@ -247,6 +247,12 @@ class Includes extends SubCompiler {
 	// Returns true if the provided ModuleType should
 	// not generate an include when used.
 	function isNoIncludeType(mt: ModuleType, unwrapAbstract: Bool = true): Bool {
+		// Special case for cxx.async.Promise
+		final cd = mt.getCommonData();
+		if(cd.pack.length == 2 && cd.pack[0] == "cxx" && cd.pack[1] == "async" && cd.name == "Promise") {
+			return true;
+		}
+		
 		final result = switch(mt) {
 			case TAbstract(absRef): {
 				if(unwrapAbstract) {
@@ -272,7 +278,6 @@ class Includes extends SubCompiler {
 		// If this module is set to be ignored,
 		// check if there is include meta.
 		if(result) {
-			final cd = mt.getCommonData();
 			if(cd.hasMeta(Meta.Include) || cd.hasMeta(Meta.AddInclude) || cd.hasMeta(Meta.YesInclude)) {
 				return false;
 			}
@@ -413,6 +418,14 @@ class Includes extends SubCompiler {
 			// Add our "main" include if @:noInclude is absent.
 			// First look for and use @:include, otherwise, use default header include.
 			final cd = mt.getCommonData();
+			
+			// Special handling for cxx.async.Promise - it's header is embedded, not a separate file
+			if(cd.pack.length == 2 && cd.pack[0] == "cxx" && cd.pack[1] == "async" && cd.name == "Promise") {
+				// The Promise header is embedded in compilation, add the special include
+				addInclude("cxx_async_Promise.h", header, false);
+				return;
+			}
+			
 			final isExtern = cd.isExtern || cd.hasMeta(":extern");
 			final main = Main.getCurrentModule();
 			if(main != null && main.getUniqueId() == mt.getUniqueId()) return;
@@ -465,13 +478,17 @@ class Includes extends SubCompiler {
 	}
 
 	// Adds includes introduced from MetaAccess.
-	// Returns "true" if a default include was not added.
+	// Returns "false" if a default include should NOT be added.
 	function addIncludeFromMetaAccess(metaAccess: Null<MetaAccess>, header: Bool = false): Bool {
 		if(metaAccess == null) return true;
 
 		var defaultOverrided = false;
 
-		if(!metaAccess.maybeHas(Meta.NoInclude)) {
+		if(metaAccess.maybeHas(Meta.NoInclude)) {
+			// If @:noInclude is present, we should not add default include
+			// Return false to indicate no default include should be added
+			defaultOverrided = false;
+		} else {
 			final includeOverride = metaAccess.extractParamsFromFirstMeta(Meta.Include);
 			if(!addMetaEntryInc(includeOverride, header)) {
 				defaultOverrided = true;

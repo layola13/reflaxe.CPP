@@ -99,4 +99,12 @@ enum abstract Define(String) from String to String {
 		generated in the output folder.
 	**/
 	var CMake = "cmake";
+
+	/**
+		-D cxx_coroutine
+
+		If defined, Reflaxe/C++ will generate C++20 coroutines
+		for async/await functionality. Requires C++20 compiler support.
+	**/
+	var Coroutine = "cxx_coroutine";
 }

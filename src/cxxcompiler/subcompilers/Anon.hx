@@ -36,7 +36,71 @@ class Anon extends SubCompiler {
 	var anonStructs: Map<String, AnonStruct> = [];
 	var namedAnonStructs: Map<String, AnonStruct> = [];
 
+	public function compileObjectDeclWithoutCheck(type: Type, fields: Array<{ name: String, expr: TypedExpr }>, originalExpr: TypedExpr, compilingInHeader: Bool = false): String {
+		// This is the internal implementation without the anonymous struct check
+		return _compileObjectDeclInternal(type, fields, originalExpr, compilingInHeader);
+	}
+
 	public function compileObjectDecl(type: Type, fields: Array<{ name: String, expr: TypedExpr }>, originalExpr: TypedExpr, compilingInHeader: Bool = false): String {
+		// Check if this is from standard library (skip check for standard library types)
+		var isStandardLibrary = false;
+		switch(originalExpr.pos.getFile()) {
+			case file if(file.indexOf("/std/") >= 0 || file.indexOf("\\std\\") >= 0): {
+				isStandardLibrary = true;
+			}
+			case _: {}
+		}
+		
+		if(!isStandardLibrary) {
+			// Check if this is an anonymous struct without typedef
+			// But first check if it matches a known typedef like PosInfos
+			var isKnownTypedef = false;
+			switch(type) {
+				case TAnonymous(anonRef): {
+					// Check if this anonymous type matches a known typedef structure
+					final anonFields: Array<AnonField> = [];
+					for(field in anonRef.get().fields) {
+						anonFields.push({
+							name: field.name,
+							type: field.type,
+							optional: field.type.isNull(),
+							pos: field.pos
+						});
+					}
+					// Check if it matches any named typedef
+					for(namedKey => namedStruct in namedAnonStructs) {
+						if(hasSameStructure(findAnonStruct(anonFields), namedStruct)) {
+							isKnownTypedef = true;
+							break;
+						}
+					}
+				}
+				case _: {}
+			}
+			
+			final isAnonymousWithoutTypedef = switch(type) {
+				case TAnonymous(_): !isKnownTypedef;  // Direct anonymous type without typedef, unless it matches a known one
+				case TType(defTypeRef, _): {
+					// Check if it's a typedef to an anonymous type
+					final inner = Compiler.getTypedefInner(type);
+					switch(inner) {
+						case TAnonymous(_): false;  // Has typedef, OK
+						case _: false;
+					}
+				}
+				case _: false;
+			};
+			
+			// Report error for anonymous structs without typedef
+			if(isAnonymousWithoutTypedef) {
+				originalExpr.pos.makeError(AnonymousStructNotAllowed);
+			}
+		}
+		
+		return _compileObjectDeclInternal(type, fields, originalExpr, compilingInHeader);
+	}
+	
+	function _compileObjectDeclInternal(type: Type, fields: Array<{ name: String, expr: TypedExpr }>, originalExpr: TypedExpr, compilingInHeader: Bool = false): String {
 		final anonFields: Array<AnonField> = [];
 		final anonMap: Map<String, TypedExpr> = [];
 		for(f in fields) {

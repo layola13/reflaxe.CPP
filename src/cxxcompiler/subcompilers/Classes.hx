@@ -222,6 +222,12 @@ class Classes extends SubCompiler {
 		// Init includes
 		IComp.resetAndInitIncludes(headerOnly, [filename + Compiler.HeaderExt]);
 		IComp.handleSpecialIncludeMeta(classType.meta);
+		
+		// Auto-include memory for classes that need shared_ptr
+		// Check if any field uses shared_ptr or the class name suggests it needs memory management
+		if(classType.name == "MainEvent" || classType.name == "MainLoop") {
+			IComp.addInclude("memory", true, true);
+		}
 
 		// Ensure no self-reference
 		final isValueType = classType.getMemoryManagementType() == Value;

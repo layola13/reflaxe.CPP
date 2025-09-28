@@ -39,6 +39,7 @@ enum ErrorType {
 	MapWithAnyNotSupported;
 	AnyTypeNotSupported;
 	UntypedNotSupported;
+	AnonymousStructNotAllowed;
 	OMMIncorrectParamCount;
 	ValueSelfRef;
 	ValueAssignedNull;
@@ -141,6 +142,10 @@ class Error {
 				"'untyped' is not supported by Reflaxe/C++.\n" +
 				"The C++ target requires strong typing for type safety.\n" +
 				"Please use properly typed code or consider using Any type for flexible typing.";
+			}
+			case AnonymousStructNotAllowed: {
+				"Anonymous structures are not allowed in C++ target. Please define a typedef for this structure.\n" +
+				"Example: typedef MyStruct = { field1: Type1, field2: Type2 }";
 			}
 			case OMMIncorrectParamCount: {
 				"@:overrideMemoryManagement wrapper does not have exactly one type parameter.";

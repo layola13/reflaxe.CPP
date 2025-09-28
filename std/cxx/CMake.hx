@@ -183,9 +183,9 @@ class CMake {
 			**/
 			case "<CXX_STANDARD>": {
 				if(addComments) {
-					result.push("# Set C++17 standard");
+					result.push("# Set C++20 standard for coroutine and async support");
 				}
-				result.push("set(CMAKE_CXX_STANDARD 17)");
+				result.push("set(CMAKE_CXX_STANDARD 20)");
 				result.push("set(CMAKE_CXX_STANDARD_REQUIRED ON)");
 				result.push("set(CMAKE_CXX_EXTENSIONS OFF)\n");
 			}
