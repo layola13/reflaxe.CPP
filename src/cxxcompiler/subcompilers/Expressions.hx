@@ -205,12 +205,23 @@ class Expressions extends SubCompiler {
 			{
 				result = Main.compileExpression(nullCompExpr);
 
-				if(!Main.getExprType(nullCompExpr).isNull()) {
-					// The type is non-nullable pointer, we need to compare with nullptr
-					final exprType = Main.getExprType(nullCompExpr);
+				final exprType = Main.getExprType(nullCompExpr);
+				if(exprType.isNull()) {
+					// The type is nullable (std::optional), so we must use std::optional methods.
+					switch(op) {
+						case OpNotEq: {
+							result = result + ".has_value()";
+						}
+						case OpEq: {
+							result = "!" + result + ".has_value()";
+						}
+						case _: {}
+					}
+				} else {
+					// The type is non-nullable, check if it's a pointer type
 					final mmt = Types.getMemoryManagementTypeFromType(exprType);
 					if(exprType.isPtr() || mmt == SharedPtr || mmt == UniquePtr) {
-						// For pointer types, always use nullptr comparison
+						// For pointer types, use nullptr comparison
 						switch(op) {
 							case OpNotEq: {
 								result = "(" + result + " != nullptr)";
@@ -221,7 +232,7 @@ class Expressions extends SubCompiler {
 							case _: {}
 						}
 					} else {
-						// For non-pointer types, use the bool operator
+						// For non-pointer value types, use bool operator
 						switch(op) {
 							case OpNotEq: {
 								// For != null on non-nullable non-pointer, just output the variable
@@ -229,21 +240,10 @@ class Expressions extends SubCompiler {
 								result = "(bool(" + result + "))";
 							}
 							case OpEq: {
-								result = "!" + result;
+								result = "!(" + result + ")";
 							}
 							case _: {}
 						}
-					}
-				} else {
-					// The type is nullable (std::optional), so we can use std::optional methods.
-					switch(op) {
-						case OpNotEq: {
-							result = result + ".has_value()";
-						}
-						case OpEq: {
-							result = "!" + result + ".has_value()";
-						}
-						case _: {}
 					}
 				}
 			}
@@ -393,8 +393,11 @@ class Expressions extends SubCompiler {
 				result += "\n}";
 			}
 			case TFor(tvar, iterExpr, blockExpr): {
-				// Prefer Haxe's iterator protocol when available (List, Iterator, etc.).
-				final itType = Main.getExprType(iterExpr).unwrapNullTypeOrSelf();
+				// Check if the iterator expression is nullable
+				final iterType = Main.getExprType(iterExpr);
+				final isNullable = iterType.isNull();
+				final itType = iterType.unwrapNullTypeOrSelf();
+				
 				var useIteratorProtocol = false;
 				var iteratorExpr: String = null;
 				switch(itType) {
@@ -403,7 +406,8 @@ class Expressions extends SubCompiler {
 						if(fullName == "haxe.ds.List") {
 							useIteratorProtocol = true;
 							// Use iterator() method which handles empty lists properly
-							iteratorExpr = Main.compileExpressionOrError(iterExpr) + "->iterator()";
+							final baseCpp = Main.compileExpressionOrError(iterExpr);
+							iteratorExpr = baseCpp + "->iterator()";
 						} else if(fullName == "Iterator" || fullName == "KeyValueIterator") {
 							useIteratorProtocol = true;
 							iteratorExpr = Main.compileExpressionOrError(iterExpr);
@@ -412,7 +416,18 @@ class Expressions extends SubCompiler {
 					case _:
 				}
 
-				if(useIteratorProtocol) {
+				if(isNullable && !useIteratorProtocol) {
+					// For nullable arrays/iterables, we need to check for null first
+					final iterCpp = Main.compileExpressionOrError(iterExpr);
+					final tempVar = "__iter" + Std.string(__tmpAliasCounter++);
+					result = "{\n\tauto " + tempVar + " = " + iterCpp + ";\n";
+					result += "\tif(" + tempVar + ".has_value()) {\n";
+					result += "\t\tfor(auto& " + tvar.name + " : " + tempVar + ".value()) {\n";
+					result += toIndentedScope(blockExpr).tab(2);
+					result += "\n\t\t}\n";
+					result += "\t}\n";
+					result += "}";
+				} else if(useIteratorProtocol) {
 					final itVar = "__it" + Std.string(__tmpAliasCounter++);
 					result = '{ auto ${itVar} = ${iteratorExpr};\nwhile(${itVar}->hasNext()) {\n\tauto ${tvar.name} = ${itVar}->next();\n' + toIndentedScope(blockExpr) + '\n}\n}';
 				} else {
@@ -2020,23 +2035,31 @@ class Expressions extends SubCompiler {
 			case TBinop(OpEq, { expr: TConst(TNull) }, e) | TBinop(OpEq, e, { expr: TConst(TNull) }): {
 				final eCpp = Main.compileExpressionOrError(e);
 				final eType = Main.getExprType(e);
-				// For pointer types, compare with nullptr
-				if(eType.isPtr() || Types.getMemoryManagementTypeFromType(eType) != Value) {
-					"(" + eCpp + " == " + Compiler.PointerNullCpp + ")";
-				} else {
+				// Check if type is nullable (std::optional)
+				if(eType.isNull()) {
 					// For optional types, use has_value()
 					"!" + eCpp + ".has_value()";
+				} else if(eType.isPtr() || Types.getMemoryManagementTypeFromType(eType) != Value) {
+					// For pointer types, compare with nullptr
+					"(" + eCpp + " == " + Compiler.PointerNullCpp + ")";
+				} else {
+					// For other value types, this shouldn't happen
+					"!(" + eCpp + ")";
 				}
 			}
 			case TBinop(OpNotEq, { expr: TConst(TNull) }, e) | TBinop(OpNotEq, e, { expr: TConst(TNull) }): {
 				final eCpp = Main.compileExpressionOrError(e);
 				final eType = Main.getExprType(e);
-				// For pointer types, compare with nullptr
-				if(eType.isPtr() || Types.getMemoryManagementTypeFromType(eType) != Value) {
-					"(" + eCpp + " != " + Compiler.PointerNullCpp + ")";
-				} else {
+				// Check if type is nullable (std::optional)
+				if(eType.isNull()) {
 					// For optional types, use has_value()
 					eCpp + ".has_value()";
+				} else if(eType.isPtr() || Types.getMemoryManagementTypeFromType(eType) != Value) {
+					// For pointer types, compare with nullptr
+					"(" + eCpp + " != " + Compiler.PointerNullCpp + ")";
+				} else {
+					// For other value types, this shouldn't happen
+					"(bool(" + eCpp + "))";
 				}
 			}
 			case _: {
