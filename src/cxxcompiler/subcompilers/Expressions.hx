@@ -481,33 +481,11 @@ class Expressions extends SubCompiler {
 				result = compileIf(econd, ifExpr, elseExpr);
 			}
 			case TWhile(econd, blockExpr, normalWhile): {
-				// Don't wrap the condition in Null<Bool> if it's already a boolean expression
+				// Compile the condition expression directly
+				// The Haxe standard library MainLoop uses simple null checks
 				final condExpr = econd.unwrapParenthesis();
-				final cppCond = switch(condExpr.expr) {
-					// For != null comparisons, handle based on type
-					case TBinop(OpNotEq, { expr: TConst(TNull) }, e) | TBinop(OpNotEq, e, { expr: TConst(TNull) }): {
-						final eType = Main.getExprType(e);
-						// Check if it's a nullable type (std::optional)
-						if(eType.isNull()) {
-							// For std::optional types, use has_value()
-							final eCpp = Main.compileExpression(e);
-							eCpp + ".has_value()";
-						} else if(eType.isPtr() || Types.getMemoryManagementTypeFromType(eType) == SharedPtr) {
-							// For non-nullable pointer types, use nullptr comparison
-							final eCpp = Main.compileExpression(e);
-							"(" + eCpp + " != nullptr)";
-						} else {
-							// For other types, compile as Null<Bool>
-							final nullableBoolT = TAbstract(Main.getNullType(), [Context.getType("Bool")]);
-							XComp.compileExpressionForType(condExpr, nullableBoolT);
-						}
-					}
-					case _: {
-						// For other conditions, compile as Null<Bool>
-						final nullableBoolT = TAbstract(Main.getNullType(), [Context.getType("Bool")]);
-						XComp.compileExpressionForType(condExpr, nullableBoolT);
-					}
-				}
+				final cppCond = Main.compileExpressionOrError(condExpr);
+				
 				if(normalWhile) {
 					result = "while(" + cppCond + ") {\n";
 					result += toIndentedScope(blockExpr);

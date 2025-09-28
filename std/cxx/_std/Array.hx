@@ -168,7 +168,11 @@ extern class Array<T> {
 	}
 
 	@:runtime public inline function pop(): Null<T> {
-		final result = untyped this.back();
+		if(untyped this.empty()) {
+			return null;
+		}
+		@:include("optional", true)
+		final result: Null<T> = untyped __cpp__("std::make_optional({0})", this.back());
 		untyped this.pop_back();
 		return result;
 	}
@@ -179,7 +183,11 @@ extern class Array<T> {
 	}
 
 	@:runtime public inline function shift(): Null<T>  {
-		final result = untyped this.front();
+		if(untyped this.empty()) {
+			return null;
+		}
+		@:include("optional", true)
+		final result: Null<T> = untyped __cpp__("std::make_optional({0})", this.front());
 		untyped this.pop_front();
 		return result;
 	}
