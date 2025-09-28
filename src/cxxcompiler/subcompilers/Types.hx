@@ -227,22 +227,8 @@ class Types extends SubCompiler {
 			}
 			case TDynamic(t3): {
 				if(t3 == null) {
-					#if (macro || display)
-					if(!cxx.Compiler.dynamicTypeEnabled) {
-						pos.makeError(DisallowedDynamic);
-					} else
-					#end
-					if(isAccumulatingDynamicToTemplate()) {
-						final result = generateDynamicTemplateName();
-						addDynamicTemplate(result);
-						result;
-					} else {
-						// pos.makeError(DynamicUnsupported);
-						DComp.enableDynamic(pos);
-						IComp.addTypeUtilHeader(true);
-						IComp.addInclude("dynamic/Dynamic.h", true, true);
-						DComp.compileDynamicTypeName();
-					}
+					// Dynamic type is not supported - always throw an error
+					pos.makeError(DynamicUnsupported);
 				} else {
 					compileType(t3, pos, asValue);
 				}

@@ -35,6 +35,8 @@ enum ErrorType {
 	CouldNotCompileExpression(e: Null<TypedExpr>);
 	CannotCompileNullType;
 	DynamicUnsupported;
+	MapWithDynamicNotSupported;
+	UntypedNotSupported;
 	OMMIncorrectParamCount;
 	ValueSelfRef;
 	ValueAssignedNull;
@@ -126,6 +128,17 @@ class Error {
 			}
 			case DynamicUnsupported: {
 				"Dynamic not supported. Consider using Any or generics instead?";
+			}
+			case MapWithDynamicNotSupported: {
+				"Map with Dynamic value type is not supported by Reflaxe/C++.\n" +
+				"Dynamic types cannot be properly resolved during compilation and will cause TMono(null) errors.\n" +
+				"Please use a specific type instead of Dynamic for Map values.\n" +
+				"For example: Map<String, MyClass> or Map<String, Any>";
+			}
+			case UntypedNotSupported: {
+				"'untyped' is not supported by Reflaxe/C++.\n" +
+				"The C++ target requires strong typing for type safety.\n" +
+				"Please use properly typed code or consider using Any type for flexible typing.";
 			}
 			case OMMIncorrectParamCount: {
 				"@:overrideMemoryManagement wrapper does not have exactly one type parameter.";

@@ -570,6 +570,10 @@ class Expressions extends SubCompiler {
 
 				var ignore = false;
 				for(m in unwrappedInfo.meta) {
+					// Check for untyped metadata - this is not supported in C++
+					if(m.name == ":untyped" || m.name == "untyped") {
+						expr.pos.makeError(UntypedNotSupported);
+					}
 					if(m.name == ":ignore") {
 						ignore = true;
 						break;
@@ -1867,6 +1871,28 @@ class Expressions extends SubCompiler {
 	**/
 	function compileNew(expr: TypedExpr, type: Type, el: Array<TypedExpr>, overrideMMT: Null<MemoryManagementType> = null): String {
 		Main.onTypeEncountered(type, compilingInHeader, expr.pos);
+
+		// Check for Map with Dynamic value type
+		switch(type) {
+			case TInst(clsRef, params): {
+				final cls = clsRef.get();
+				// Check if this is a Map class (StringMap, IntMap, ObjectMap)
+				if(cls.name == "StringMap" || cls.name == "IntMap" || cls.name == "ObjectMap") {
+					// Check if value type is Dynamic
+					if(params.length > 0) {
+						final valueType = params[params.length - 1]; // Last param is the value type
+						switch(valueType) {
+							case TDynamic(null): {
+								// This is Map<*, Dynamic>, which causes TMono errors
+								expr.pos.makeError(MapWithDynamicNotSupported);
+							}
+							case _:
+						}
+					}
+				}
+			}
+			case _:
+		}
 
 		final nfc = checkNativeCodeMeta(expr, el, type.getParams());
 		if(nfc != null) {
