@@ -1419,21 +1419,56 @@ class Expressions extends SubCompiler {
 	**/
 	function compileLocalVariable(tvar: TVar, maybeExpr: Null<TypedExpr>, originalExpr: TypedExpr, constexpr: Bool) {
 		Main.determineTVarType(tvar, maybeExpr);
-		final t = Main.getTVarType(tvar);
+		var t = Main.getTVarType(tvar);
+		
+		// Check if the expression has @:await metadata
+		// If so, we need to unwrap Promise types
+		var hasAwait = false;
+		if(maybeExpr != null) {
+			switch(maybeExpr.expr) {
+				case TMeta(m, _): {
+					if(m.name == ":await" || m.name == "await") {
+						hasAwait = true;
+						// If the expression type is Promise<T>, the variable type should be T
+						final exprType = Main.getExprType(maybeExpr);
+						switch(exprType) {
+							case TInst(clsRef, params): {
+								final cls = clsRef.get();
+								if(cls.module == "cxx.async.Promise" && cls.name == "Promise" && params.length > 0) {
+									// For nested Promises, keep unwrapping
+									var innerType = params[0];
+									while(true) {
+										switch(innerType) {
+											case TInst(innerClsRef, innerParams): {
+												final innerCls = innerClsRef.get();
+												if(innerCls.module == "cxx.async.Promise" && innerCls.name == "Promise" && innerParams.length > 0) {
+													innerType = innerParams[0];
+												} else {
+													break;
+												}
+											}
+											case _: break;
+										}
+									}
+									t = innerType;
+								}
+							}
+							case _:
+						}
+					}
+				}
+				case _:
+			}
+		}
+		
 		Main.onTypeEncountered(t, compilingInHeader, originalExpr.pos);
 
 		if(t.requiresValue() && maybeExpr == null) {
 			originalExpr.pos.makeError(InitializedTypeRequiresValue);
 		}
 
-		final typeCpp = if(t.isUnresolvedMonomorph()) {
-			// TODO: Why use std::any instead of auto?
-			// I must have originally made this resolve to Any for a reason?
-			// But Haxe's Any will only apply if explicitly typed as Any.
-			//
-			//IComp.addInclude("any", compilingInHeader, true);
-			//"std::any";
-
+		final typeCpp = if(t.isUnresolvedMonomorph() || hasAwait) {
+			// Use auto for await expressions to let C++ deduce the type
 			"auto";
 		} else {
 			TComp.compileType(t, originalExpr.pos);
@@ -1462,6 +1497,21 @@ class Expressions extends SubCompiler {
 				}
 				case TFunction(tfunc): {
 					" = " + compileLocalFunction(tvar.name, originalExpr, tfunc);
+				}
+				case TMeta(m, e): {
+					// Check if this is an @:await expression
+					var hasAwait = false;
+					switch(m.name) {
+						case ":await" | "await": hasAwait = true;
+						case _:
+					}
+					if(hasAwait) {
+						// Handle @:await expression
+						" = " + compileAwaitExpression(e);
+					} else {
+						// Handle other metadata
+						" = " + Main.compileExpression(maybeExpr);
+					}
 				}
 				case _: {
 					" = " + compileExpressionForType(maybeExpr, t);
@@ -2790,23 +2840,57 @@ class Expressions extends SubCompiler {
 		Works within async functions to properly handle Promise unwrapping
 	**/
 	function compileAwaitExpression(expr: TypedExpr): Null<String> {
-		// Check if this is a Promise type and call wait() on it
+		// Helper function to check if a type is a Promise
+		function isPromiseType(t: Type): Bool {
+			return switch(t) {
+				case TInst(clsRef, _): {
+					final cls = clsRef.get();
+					cls.module == "cxx.async.Promise" && cls.name == "Promise";
+				}
+				case _: false;
+			};
+		}
+		
+		// Helper function to unwrap nested Promises recursively
+		function unwrapNestedPromises(compiledExpr: String, type: Type, depth: Int = 0): String {
+			if(depth > 10) {
+				// Safety check to prevent infinite recursion
+				return compiledExpr;
+			}
+			
+			switch(type) {
+				case TInst(clsRef, params): {
+					final cls = clsRef.get();
+					if(cls.module == "cxx.async.Promise" && cls.name == "Promise") {
+						// This is a Promise, unwrap it
+						final unwrappedExpr = compiledExpr + "->wait()";
+						
+						// Check if the inner type is also a Promise
+						if(params.length > 0 && isPromiseType(params[0])) {
+							// Recursively unwrap nested Promises
+							return unwrapNestedPromises(unwrappedExpr, params[0], depth + 1);
+						} else {
+							// Inner type is not a Promise, we're done
+							return unwrappedExpr;
+						}
+					}
+				}
+				case _: {}
+			}
+			
+			// Not a Promise type
+			return compiledExpr;
+		}
+		
+		// Get the type of the expression
 		final exprType = Main.getExprType(expr);
+		
+		// Compile the expression
 		final compiledExpr = Main.compileExpression(expr);
 		
-		// Check if the expression returns a Promise
-		final isPromise = switch(exprType) {
-			case TInst(clsRef, _): {
-				final cls = clsRef.get();
-				// Check if this is a Promise class
-				cls.module == "cxx.async.Promise" && cls.name == "Promise";
-			}
-			case _: false;
-		};
-		
-		if(isPromise && compiledExpr != null) {
-			// Call wait() on the Promise to get the value
-			return compiledExpr + "->wait()";
+		if(compiledExpr != null && isPromiseType(exprType)) {
+			// For Promise types, recursively unwrap all nested Promises
+			return unwrapNestedPromises(compiledExpr, exprType);
 		}
 		
 		// For non-Promise expressions, compile normally

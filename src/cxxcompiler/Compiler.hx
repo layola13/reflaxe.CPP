@@ -1123,6 +1123,13 @@ using Promise = std::shared_ptr<PromiseImpl<T>>;
 	**/
 	function generateCMake() {
 		#if (macro || display)
+		// Get the main class name from the main expression
+		final mainClassName = getMainClassName();
+		if(mainClassName != null) {
+			// Set the executable name based on the main class
+			cxx.CMake.setExecutableName(mainClassName);
+		}
+		
 		// Always generate CMakeLists.txt to ensure build system is available
 		final cmakePath = if(cxx.CMake.isEnabled()) {
 			cxx.CMake.getOutputPath();
@@ -1131,6 +1138,69 @@ using Promise = std::shared_ptr<PromiseImpl<T>>;
 		}
 		setExtraFile(cmakePath, cxx.CMake.generateCMakeLists(registeredSourceFiles));
 		#end
+	}
+
+	/**
+		Gets the main class name from the compiler context.
+	**/
+	function getMainClassName(): Null<String> {
+		// Try to find the main class from the main expression
+		final mainExpr = getMainExpr();
+		if(mainExpr != null) {
+			// The main expression is usually a call to the main class's main method
+			// Try to extract the class name from it
+			switch(mainExpr.expr) {
+				case TCall(e, _): {
+					switch(e.expr) {
+						case TField(e2, fa): {
+							// Get the type of the class
+							switch(e2.expr) {
+								case TTypeExpr(mt): {
+									switch(mt) {
+										case TClassDecl(c): {
+											// Found the main class
+											return c.get().name;
+										}
+										case _:
+									}
+								}
+								case _:
+							}
+						}
+						case _:
+					}
+				}
+				case TBlock(exprs) if(exprs.length > 0): {
+					// Sometimes the main expr is wrapped in a block
+					switch(exprs[0].expr) {
+						case TCall(e, _): {
+							switch(e.expr) {
+								case TField(e2, fa): {
+									switch(e2.expr) {
+										case TTypeExpr(mt): {
+											switch(mt) {
+												case TClassDecl(c): {
+													return c.get().name;
+												}
+												case _:
+											}
+										}
+										case _:
+									}
+								}
+								case _:
+							}
+						}
+						case _:
+					}
+				}
+				case _:
+			}
+		}
+		
+		// Fallback: try to get from compiler define
+		// Note: In newer Haxe versions, this might not work as expected
+		return null;
 	}
 
 	/**

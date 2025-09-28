@@ -1088,6 +1088,14 @@ class Classes extends SubCompiler {
 				if(compiledContent != null && compiledContent.indexOf("std::shared_ptr<haxe::ds::_List::ListNode") != -1 && compiledContent.indexOf("while(true)") != -1) {
 					compiledContent = StringTools.replace(compiledContent, "while(true)", "while(head != nullptr)");
 				}
+				
+				// Patch for MainLoop::sortEvents to prevent null pointer access
+				// Check if this is the sortEvents method of the MainLoop class
+				if(compiledContent != null && ctx.f.field.name == "sortEvents" && classType.module == "haxe.MainLoop") {
+					// Add null checks before accessing tail->next and list->prev
+					compiledContent = StringTools.replace(compiledContent, "tail->next = nullptr", "if(tail != nullptr) {\n\t\ttail->next = nullptr;\n\t}");
+					compiledContent = StringTools.replace(compiledContent, "list->prev = nullptr", "if(list != nullptr) {\n\t\tlist->prev = nullptr;\n\t}");
+				}
 				// Fix assignment operations for List iteration
 				if(compiledContent != null && classType != null && classType.pack.join(".") == "haxe.ds" && classType.name == "List") {
 					// Fix l = l.value()->next patterns in toString, join, filter, map methods
