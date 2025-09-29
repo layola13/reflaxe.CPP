@@ -13,7 +13,7 @@ class List<T> {
 	}
 
 	public function add(item:T):Void {
-		var x = new ListNode(item, null);
+		var x:ListNode<T> = new ListNode(item, cast null);
 		if (h == null)
 			h = x;
 		else
@@ -146,9 +146,9 @@ class List<T> {
 @:cxxStd
 private class ListNode<T> {
 	public var item:T;
-	public var next:ListNode<T>;
+	public var next:Null<ListNode<T>>;
 
-	public function new(item:T, next:ListNode<T>) {
+	public function new(item:T, next:Null<ListNode<T>>) {
 		this.item = item;
 		this.next = next;
 	}
@@ -156,9 +156,9 @@ private class ListNode<T> {
 
 @:cxxStd
 private class ListIterator<T> {
-	var head:ListNode<T>;
+	var head:Null<ListNode<T>>;
 
-	public inline function new(head:ListNode<T>) {
+	public inline function new(head:Null<ListNode<T>>) {
 		this.head = head;
 	}
 
@@ -176,9 +176,9 @@ private class ListIterator<T> {
 @:cxxStd
 private class ListKeyValueIterator<T> {
 	var idx:Int;
-	var head:ListNode<T>;
+	var head:Null<ListNode<T>>;
 
-	public inline function new(head:ListNode<T>) {
+	public inline function new(head:Null<ListNode<T>>) {
 		this.head = head;
 		this.idx = 0;
 	}

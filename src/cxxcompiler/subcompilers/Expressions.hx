@@ -1405,7 +1405,9 @@ class Expressions extends SubCompiler {
 	**/
 	function compileLocalFunction(name: Null<String>, expr: TypedExpr, tfunc: TFunc): String {
 		IComp.addInclude("functional", compilingInHeader, true);
-		final captureType = compilingForTopLevel ? "" : "&";
+		// Use value capture [=] instead of reference capture [&] to avoid dangling references
+		// when the lambda is returned from a function and used outside its original scope
+		final captureType = compilingForTopLevel ? "" : "=";
 		var result = "[" + captureType + "](" + tfunc.args.map(a -> Main.compileFunctionArgument(a, expr.pos, false, true)).join(", ") + ") mutable {\n";
 		
 		// Setup call stack tracking for local function
