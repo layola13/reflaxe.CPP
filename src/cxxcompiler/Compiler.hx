@@ -760,7 +760,13 @@ class Compiler extends reflaxe.DirectToStringCompiler {
 			content += "#include <string>\n";
 			content += "#include <deque>\n";
 			content += "#include <functional>\n";  // Add functional header for std::function
-			content += "#include \"DynamicToString.h\"\n\n";
+			content += "#include \"DynamicToString.h\"\n";
+			// Only include Int64 if it's actually used in the anon structures
+			// Check if anonContent contains "Int64"
+			if(anonContent.indexOf("_Int64") >= 0) {
+				content += "#include \"__Int64.h\"\n";
+			}
+			content += "\n";
 			// Use forward declarations instead of including headers to avoid circular dependencies
 			content += "// Forward declarations\n";
 			content += IComp.compileForwardDeclares() + "\n\n";
@@ -792,9 +798,14 @@ class Compiler extends reflaxe.DirectToStringCompiler {
 			final headerContent = RComp.typeUtilHeaderContent();
 
 			var content = "#pragma once\n\n";
-			content += IComp.compileHeaderIncludes() + "\n\n";
+			// Don't include other headers here to avoid circular dependencies
+			// The necessary includes are already in the content from typeUtilHeaderContent()
+			content += "#include <array>\n";
+			content += "#include <memory>\n";
+			content += "#include <optional>\n";
+			content += "#include <string>\n\n";
 			content += headerContent + "\n\n";
-			setExtraFile(HeaderFolder + "/" + TypeUtilsHeaderFile + HeaderExt, content); 
+			setExtraFile(HeaderFolder + "/" + TypeUtilsHeaderFile + HeaderExt, content);
 		}
 	}
 

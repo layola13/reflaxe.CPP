@@ -82,7 +82,10 @@ class Reflection extends SubCompiler {
 		if(dynEnabled) lines.push('using Dyn = haxe::Dynamic_${StringTools.replace(clsName, "::", "_")}${cls.params.length > 0 ? '<$cpp>' : ""};');
 		lines.push('constexpr static _class_data<${ic}, ${sc}> data {${fieldsCpp}};');
 
-		return 'template<${paramsCpp}> struct _class<${cpp}> {\n${lines.join("\n").tab()}\n};';
+		// Add global namespace prefix :: to avoid ambiguity when the class is in a non-haxe namespace
+		final globalCpp = if (cpp.indexOf("::") >= 0 && !StringTools.startsWith(cpp, "::")) "::" + cpp else cpp;
+		
+		return 'template<${paramsCpp}> struct _class<${globalCpp}> {\n${lines.join("\n").tab()}\n};';
 	}
 
 	public function typeUtilHeaderContent() {

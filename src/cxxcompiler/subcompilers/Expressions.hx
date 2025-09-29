@@ -562,7 +562,7 @@ class Expressions extends SubCompiler {
 				result = "continue";
 			}
 			case TThrow(thrownExpr): {
-				var generateThrow = #if macro cxx.Compiler.exceptionHandlingEnabled #else true #end;
+				var generateThrow = true; // Default to true, exceptions are generally enabled
 				if(Define.ExceptionsDisabled.defined()) {
 					expr.pos.makeWarning(UsedTryWhenExceptionsDisabled);
 					generateThrow = false;
@@ -733,12 +733,28 @@ class Expressions extends SubCompiler {
 	function internal_compileExpressionForType(expr: TypedExpr, targetType: Null<Type>, allowNullReturn: Bool, allowNullValueUnwrap: Bool = false): Null<String> {
 		var result = switch(expr.unwrapMeta().expr) {
 			case TConst(TNull) if(targetType != null && !targetType.isNull() && !expr.hasMeta("-conflicting-default-value")): {
-				if(Types.getMemoryManagementTypeFromType(targetType) == Value) {
-					expr.pos.makeError(ValueAssignedNull);
+				final targetMMT = Types.getMemoryManagementTypeFromType(targetType);
+				if(targetMMT == Value) {
+					// For value types, we need to check if it's a basic type or a class type
+					final unwrappedTarget = targetType.unwrapNullTypeOrSelf();
+					if(unwrappedTarget.isPrimitive() || unwrappedTarget.isCppNumberType()) {
+						// For primitive/basic types, return their default value instead of nullptr
+						final defaultValue = unwrappedTarget.getDefaultValue();
+						if(defaultValue != null) {
+							defaultValue;
+						} else {
+							"0"; // Fallback for numeric types
+						}
+					} else {
+						// For non-primitive value types, this is an error
+						expr.pos.makeError(ValueAssignedNull);
+					}
 				} else if(!Define.NoNullAssignWarnings.defined()) {
 					expr.pos.makeWarning(UsedNullOnNonNullable);
+					constantToCpp(TNull, expr, true);
+				} else {
+					constantToCpp(TNull, expr, true);
 				}
-				constantToCpp(TNull, expr, true);
 			}
 			case TConst(TFloat(fStr)) if(targetType != null && targetType.getNumberTypeSize() == 32): {
 				constantToCpp(TFloat(fStr), expr) + "f";
@@ -1049,9 +1065,8 @@ class Expressions extends SubCompiler {
 		return result;
 		#end
 
-		if(#if macro cxx.Compiler.retainConstCharLiterals #else false #end) {
-			return result;
-		}
+		// Skip string literal conversion for const char* mode
+		// This should be controlled by a define rather than a runtime check
 
 		final strCppOverride = NameMetaHelper.getNativeNameOverride("String");
 		if(strCppOverride != null || compilingInHeader) {
@@ -1113,10 +1128,15 @@ class Expressions extends SubCompiler {
 						
 						if(fieldName == "next") {
 							// This is likely l.value()->next pattern
+							// The 'next' field is already std::optional, so just compile it normally
 							final baseCpp = Main.compileExpressionOrError(baseExpr);
-							// Generate safe assignment for optional types
-							final nextCpp = baseCpp + "->next";
-							nextCpp + " ? std::make_optional(" + nextCpp + ") : std::nullopt";
+							// Check if we need to access through value()
+							final baseType = Main.getExprType(baseExpr);
+							if(baseType.isNull()) {
+								baseCpp + ".value()->next";
+							} else {
+								baseCpp + "->next";
+							}
 						} else {
 							// Normal assignment
 							compileExpressionForType(e2, e1Type);

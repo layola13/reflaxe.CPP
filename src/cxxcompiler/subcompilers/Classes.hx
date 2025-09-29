@@ -1106,7 +1106,7 @@ class Classes extends SubCompiler {
 					if(compiledContent.indexOf("l = l.value()->next") != -1) {
 						compiledContent = StringTools.replace(compiledContent,
 							"l = l.value()->next;",
-							"auto next = l.value()->next;\n\t\tl = next ? std::make_optional(next) : std::nullopt;"
+							"auto next = l.value()->next;\n\t\tl = next;"
 						);
 					}
 				}

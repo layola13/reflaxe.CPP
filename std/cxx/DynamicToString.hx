@@ -68,7 +68,18 @@ struct DynamicToString: public std::string {
 		} else if constexpr(has_to_string<T>::value) {
 			return s.toString();
 		} else if constexpr(haxe::_unwrap_mm<T>::can_deref) {
-			if constexpr(std::is_trivially_copy_assignable_v<std::remove_reference_t<decltype(*std::declval<T>())>>) {
+			// Handle smart pointers (shared_ptr, unique_ptr, etc.)
+			// Check if the dereferenced type has toString method
+			using deref_type = std::remove_reference_t<decltype(*std::declval<T>())>;
+			if constexpr(has_to_string<deref_type>::value) {
+				return (*s).toString();
+			} else if constexpr(is_deque<deref_type>::value) {
+				// Handle shared_ptr<deque<T>> or similar
+				return ToString(*s);
+			} else if constexpr(std::is_trivially_copy_assignable_v<deref_type>) {
+				return ToString(*s);
+			} else {
+				// For complex types, try to call ToString on the dereferenced value
 				return ToString(*s);
 			}
 		} else if constexpr(is_deque<T>::value) {

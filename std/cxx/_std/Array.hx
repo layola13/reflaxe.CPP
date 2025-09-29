@@ -9,8 +9,8 @@ import haxe.iterators.ArrayKeyValueIterator;
 class HxArray {
 	public static function concat<T>(a: cxx.Ptr<Array<T>>, other: cxx.Ptr<Array<T>>): Array<T> {
 		final result = a.copy();
-		for(o in other) {
-			result.push(o);
+		for(i in 0...other.length) {
+			result.push(other[i]);
 		}
 		return result;
 	}
@@ -107,11 +107,21 @@ class HxArray {
 	}
 
 	public static function map<T, S>(a: cxx.Ptr<Array<T>>, f: (T) -> S): Array<S> {
-		return [for (v in a) f(v)];
+		final result = new Array<S>();
+		for(i in 0...a.length) {
+			result.push(f(a[i]));
+		}
+		return result;
 	}
 
 	public static function filter<T>(a: cxx.Ptr<Array<T>>, f: (T) -> Bool): Array<T> {
-		return [for (v in a) if (f(v)) v];
+		final result = new Array<T>();
+		for(i in 0...a.length) {
+			if(f(a[i])) {
+				result.push(a[i]);
+			}
+		}
+		return result;
 	}
 
 	public static function toString<T>(a: cxx.Ptr<Array<T>>): String {
@@ -214,9 +224,9 @@ extern class Array<T> {
 	}
 
 	@:runtime public inline function copy(): Array<T> {
-		final result = [];
-		for(obj in this) {
-			result.push(obj);
+		final result = new Array<T>();
+		for(i in 0...this.length) {
+			result.push(this[i]);
 		}
 		return result;
 	}
