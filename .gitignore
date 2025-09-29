@@ -5,3 +5,6 @@ _Submit
 _Build
 Submit.bat
 .idea
+*/out/
+*/build/
+*/intended/

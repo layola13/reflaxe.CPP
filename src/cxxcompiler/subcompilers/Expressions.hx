@@ -1353,6 +1353,21 @@ class Expressions extends SubCompiler {
 		final unwrapped = t.unwrapNullTypeOrSelf();
 		final mmt = Types.getMemoryManagementTypeFromType(unwrapped);
 
+		// Check if this is an Array type which uses value equality
+		final isArray = switch(unwrapped) {
+			case TInst(clsRef, _): {
+				final cls = clsRef.get();
+				// Check for Array or std::deque (which Array maps to)
+				cls.name == "Array" || cls.hasMeta(":valueEquality");
+			}
+			case _: false;
+		};
+
+		// For Arrays, always compare by value (dereferenced)
+		if(isArray) {
+			return compileExpressionAsValue(e);
+		}
+
 		// For pointer-like types (raw pointer, shared_ptr, unique_ptr),
 		// equality should compare addresses, not dereferenced values.
 		// If wrapped in std::optional, normalize to a pointer value with value_or(nullptr).

@@ -596,12 +596,22 @@ ${unwrapMMSmartPtr.tab()}
 // classes since the input object may or may not have the field.
 
 #define GEN_EXTRACTOR_FUNC(fieldName)\\
-template<typename T, typename Other = decltype(T().fieldName), typename U = typename haxe::optional_info<Other>::inner>\\
+template<typename T, typename = void>\\
+struct _has_##fieldName : std::false_type {};\\
+template<typename T>\\
+struct _has_##fieldName<T, std::void_t<decltype(std::declval<T>().fieldName)>> : std::true_type {};\\
+template<typename T>\\
 static auto extract_##fieldName(T other) {\\
-	if constexpr(!haxe::optional_info<decltype(fieldName)>::isopt && haxe::optional_info<Other>::isopt) {\\
-		return other.fieldName.get();\\
-	} else if constexpr(std::is_same<U,haxe::optional_info<decltype(fieldName)>::inner>::value) {\\
-		return other.fieldName;\\
+	if constexpr(_has_##fieldName<T>::value) {\\
+		using Other = decltype(other.fieldName);\\
+		using U = typename haxe::optional_info<Other>::inner;\\
+		if constexpr(!haxe::optional_info<decltype(fieldName)>::isopt && haxe::optional_info<Other>::isopt) {\\
+			return other.fieldName.get();\\
+		} else if constexpr(std::is_same<U,typename haxe::optional_info<decltype(fieldName)>::inner>::value) {\\
+			return other.fieldName;\\
+		} else {\\
+			return ${Compiler.OptionalNullCpp};\\
+		}\\
 	} else {\\
 		return ${Compiler.OptionalNullCpp};\\
 	}\\
