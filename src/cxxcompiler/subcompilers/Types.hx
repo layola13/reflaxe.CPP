@@ -178,15 +178,8 @@ class Types extends SubCompiler {
 			}
 			#end
 			case TInst(clsRef, params): {
-				// Check for Dynamic in type parameters
-				for(param in params) {
-					switch(param) {
-						case TDynamic(null): {
-							pos.makeError(DynamicUnsupported);
-						}
-						case _:
-					}
-				}
+				// Dynamic in type parameters is now allowed and will be converted to std::any
+				// No longer throwing an error for Dynamic type parameters
 				
 				// Special handling for Promise type
 				final cls = clsRef.get();
