@@ -675,10 +675,54 @@ class Expressions extends SubCompiler {
 	}
 
 	function compileExpressionAsValue(expr: TypedExpr): String {
+		// Check if the expression type is already a value type
+		final exprType = Main.getExprType(expr);
+		final unwrapped = exprType.unwrapNullTypeOrSelf();
+		final mmt = Types.getMemoryManagementTypeFromType(unwrapped);
+		
+		// Check if it's a type parameter by checking if it's TInst with specific characteristics
+		final isTypeParam = switch(unwrapped) {
+			case TInst(clsRef, _): {
+				final cls = clsRef.get();
+				// Type parameters are typically represented as classes with single-letter names
+				// like T, U, V, etc. and they're defined in the type parameter list
+				cls.name.length == 1 && cls.module == "";
+			}
+			case _: false;
+		};
+		
+		// If it's already a value type or a type parameter (which could be a value type),
+		// just compile it directly without memory management conversion
+		if(mmt == Value || isTypeParam) {
+			return Main.compileExpressionOrError(expr);
+		}
+		
 		return compileMMConversion(expr, Right(Value), true);
 	}
 
 	function compileExpressionNotNullAsValue(expr: TypedExpr): String {
+		// Check if the expression type is already a value type
+		final exprType = Main.getExprType(expr);
+		final unwrapped = exprType.unwrapNullTypeOrSelf();
+		final mmt = Types.getMemoryManagementTypeFromType(unwrapped);
+		
+		// Check if it's a type parameter by checking if it's TInst with specific characteristics
+		final isTypeParam = switch(unwrapped) {
+			case TInst(clsRef, _): {
+				final cls = clsRef.get();
+				// Type parameters are typically represented as classes with single-letter names
+				// like T, U, V, etc. and they're defined in the type parameter list
+				cls.name.length == 1 && cls.module == "";
+			}
+			case _: false;
+		};
+		
+		// If it's already a value type or a type parameter (which could be a value type),
+		// just compile it directly without memory management conversion
+		if(mmt == Value || isTypeParam) {
+			return Main.compileExpressionOrError(expr);
+		}
+		
 		return compileMMConversion(expr, Right(Value));
 	}
 
@@ -739,15 +783,36 @@ class Expressions extends SubCompiler {
 					final unwrappedTarget = targetType.unwrapNullTypeOrSelf();
 					if(unwrappedTarget.isPrimitive() || unwrappedTarget.isCppNumberType()) {
 						// For primitive/basic types, return their default value instead of nullptr
-						final defaultValue = unwrappedTarget.getDefaultValue();
-						if(defaultValue != null) {
-							defaultValue;
-						} else {
-							"0"; // Fallback for numeric types
+						switch(unwrappedTarget) {
+							case TAbstract(aRef, _): {
+								final abst = aRef.get();
+								switch(abst.name) {
+									case "Int" | "UInt": "0";
+									case "Float": "0.0";
+									case "Bool": "false";
+									case _: {
+										final defaultValue = unwrappedTarget.getDefaultValue();
+										if(defaultValue != null) {
+											defaultValue;
+										} else {
+											"0"; // Fallback for numeric types
+										}
+									}
+								}
+							}
+							case _: {
+								final defaultValue = unwrappedTarget.getDefaultValue();
+								if(defaultValue != null) {
+									defaultValue;
+								} else {
+									// For non-primitive value types, use default constructor
+									TComp.compileType(unwrappedTarget, expr.pos, true) + "()";
+								}
+							}
 						}
 					} else {
-						// For non-primitive value types, this is an error
-						expr.pos.makeError(ValueAssignedNull);
+						// For non-primitive value types, use default constructor instead of error
+						TComp.compileType(unwrappedTarget, expr.pos, true) + "()";
 					}
 				} else if(!Define.NoNullAssignWarnings.defined()) {
 					expr.pos.makeWarning(UsedNullOnNonNullable);
@@ -1099,14 +1164,31 @@ class Expressions extends SubCompiler {
 			}
 		}
 
+		// Check if we need to unwrap std::optional for binary operations
 		var cppExpr1 = if(op.isAssignDirect()) {
-			Main.compileExpressionOrError(e1);
+			// For assignments to std::optional variables, compile directly
+			final e1Type = Main.getExprType(e1);
+			if(e1Type.isNull() && (op == OpAssignOp(OpAdd) || op == OpAssignOp(OpSub) || op == OpAssignOp(OpMult) || op == OpAssignOp(OpDiv))) {
+				// For compound assignments to std::optional, we need special handling
+				// e.g., end += size should become end = end.value() + size
+				Main.compileExpressionOrError(e1);
+			} else {
+				Main.compileExpressionOrError(e1);
+			}
 		} else if(useEnumIndexEquality(e1)) {
 			Main.compileExpressionOrError(e1) + "->index";
 		} else if(op.isEqualityCheck()) {
 			compileForEqualityBinop(e1);
 		} else {
-			compileExpressionNotNullAsValue(e1);
+			// For non-assignment operations, check if we need to unwrap std::optional
+			final e1Type = Main.getExprType(e1);
+			if(e1Type.isNull() && !op.isEqualityCheck()) {
+				// This is std::optional, need to unwrap it for arithmetic operations
+				final baseCpp = Main.compileExpressionOrError(e1);
+				baseCpp + ".value()";
+			} else {
+				compileExpressionNotNullAsValue(e1);
+			}
 		}
 
 		var cppExpr2 = if(op.isAssign()) {
@@ -1229,31 +1311,74 @@ class Expressions extends SubCompiler {
 			#end
 
 			var usedToString = false;
-			if(checkForPrimitiveStringAddition(e1, e2)) {
-				cppExpr2 = Compiler.ToStringFromPrim + "(" + cppExpr2 + ")";
-				usedToString = true;
-			}
-			if(checkForPrimitiveStringAddition(e2, e1)) {
-				cppExpr1 = Compiler.ToStringFromPrim + "(" + cppExpr1 + ")";
-				usedToString = true;
-			}
-			// Special handling for size() method calls
-			if(!usedToString && Main.getExprType(e1).isString()) {
-				// Check if e2 is a call to size() method
-				if(StringTools.endsWith(cppExpr2, "->size()") || StringTools.endsWith(cppExpr2, ".size()")) {
-					// Wrap size() call with std::to_string
-					cppExpr2 = "std::to_string(" + cppExpr2 + ")";
-					usedToString = true;
+			
+			// Check if we need to convert for string addition
+			final e1IsString = Main.getExprType(e1).isString();
+			final e2IsString = Main.getExprType(e2).isString();
+			
+			if(e1IsString || e2IsString) {
+				// Check if e1 needs conversion (when e2 is string and e1 is not)
+				if(e2IsString && !e1IsString) {
+					final e1Type = Main.getExprType(e1);
+					if(e1Type.isPrimitive() || e1Type.isCppNumberType()) {
+						// Convert numeric types to string
+						cppExpr1 = Compiler.ToStringFromPrim + "(" + cppExpr1 + ")";
+						usedToString = true;
+					} else if(StringTools.endsWith(cppExpr1, "->size()") || StringTools.endsWith(cppExpr1, ".size()")) {
+						// Special handling for size() method
+						cppExpr1 = "std::to_string(" + cppExpr1 + ")";
+						usedToString = true;
+					} else if(e1Type.isDynamic()) {
+						// For Dynamic types (including DynamicToString), use haxe::DynamicToString::ToString
+						cppExpr1 = "haxe::DynamicToString::ToString(" + cppExpr1 + ")";
+						usedToString = true;
+					} else {
+						// Check if the C++ expression looks like a raw numeric value (e.g., "tempLeft")
+						// This catches cases where the type system says it's a number but the string doesn't end with ()
+						// Also handle member access like obj->field or obj.field
+						if(~/^[a-zA-Z_][a-zA-Z0-9_]*$/.match(cppExpr1) || ~/^\d+$/.match(cppExpr1) ||
+						   ~/->[\w]+$/.match(cppExpr1) || ~/\.[\w]+$/.match(cppExpr1)) {
+							// Check if it's actually a numeric type that needs std::to_string
+							if(e1Type.isCppNumberType() || e1Type.isPrimitive()) {
+								cppExpr1 = "std::to_string(" + cppExpr1 + ")";
+								usedToString = true;
+							}
+							// Otherwise, leave it as is (it might already be a string or have its own string conversion)
+						}
+					}
+				}
+				
+				// Check if e2 needs conversion (when e1 is string and e2 is not)
+				if(e1IsString && !e2IsString) {
+					final e2Type = Main.getExprType(e2);
+					if(e2Type.isPrimitive() || e2Type.isCppNumberType()) {
+						// Convert numeric types to string
+						cppExpr2 = Compiler.ToStringFromPrim + "(" + cppExpr2 + ")";
+						usedToString = true;
+					} else if(StringTools.endsWith(cppExpr2, "->size()") || StringTools.endsWith(cppExpr2, ".size()")) {
+						// Special handling for size() method
+						cppExpr2 = "std::to_string(" + cppExpr2 + ")";
+						usedToString = true;
+					} else if(e2Type.isDynamic()) {
+						// For Dynamic types (including DynamicToString), use haxe::DynamicToString::ToString
+						cppExpr2 = "haxe::DynamicToString::ToString(" + cppExpr2 + ")";
+						usedToString = true;
+					} else {
+						// Check if the C++ expression looks like a raw numeric value
+						// Also handle member access like obj->field or obj.field
+						if(~/^[a-zA-Z_][a-zA-Z0-9_]*$/.match(cppExpr2) || ~/^\d+$/.match(cppExpr2) ||
+						   ~/->[\w]+$/.match(cppExpr2) || ~/\.[\w]+$/.match(cppExpr2)) {
+							// Check if it's actually a numeric type that needs std::to_string
+							if(e2Type.isCppNumberType() || e2Type.isPrimitive()) {
+								cppExpr2 = "std::to_string(" + cppExpr2 + ")";
+								usedToString = true;
+							}
+							// Otherwise, leave it as is (it might already be a string or have its own string conversion)
+						}
+					}
 				}
 			}
-			if(!usedToString && Main.getExprType(e2).isString()) {
-				// Check if e1 is a call to size() method
-				if(StringTools.endsWith(cppExpr1, "->size()") || StringTools.endsWith(cppExpr1, ".size()")) {
-					// Wrap size() call with std::to_string
-					cppExpr1 = "std::to_string(" + cppExpr1 + ")";
-					usedToString = true;
-				}
-			}
+			
 			if(usedToString && Compiler.ToStringFromPrimInclude != null) {
 				IComp.addInclude(Compiler.ToStringFromPrimInclude[0], compilingInHeader, Compiler.ToStringFromPrimInclude[1]);
 			}
@@ -1294,6 +1419,23 @@ class Expressions extends SubCompiler {
 			} else if(StringTools.endsWith(cppExpr1, ".size()")) {
 				final recv = cppExpr1.substr(0, cppExpr1.length - ".size()".length);
 				return recv + ".resize(" + cppExpr2 + ")";
+			}
+		}
+
+		// Special handling for compound assignment operators with std::optional
+		if(op.isAssignOp() && Main.getExprType(e1).isNull()) {
+			// For compound assignments like +=, -=, etc. with std::optional
+			// We need to convert: opt += val  to: opt = opt.value() + val
+			final baseOp = switch(op) {
+				case OpAssignOp(baseOp): baseOp;
+				case _: null;
+			}
+			if(baseOp != null) {
+				// Generate: opt = opt.value() op val
+				// Note: cppExpr1 is already the variable name, not cppExpr1.value()
+				// We need the raw variable name on the left side of assignment
+				final rawVarName = Main.compileExpressionOrError(e1);
+				return rawVarName + " = " + rawVarName + ".value() " + OperatorHelper.binopToString(baseOp) + " " + cppExpr2;
 			}
 		}
 
@@ -1346,7 +1488,7 @@ class Expressions extends SubCompiler {
 
 		Return the compiled C++ content if so; otherwise, return `null`.
 	**/
-	inline function checkDynamicSet(e1: TypedExpr, e2: TypedExpr): Null<String> {
+	function checkDynamicSet(e1: TypedExpr, e2: TypedExpr): Null<String> {
 		return switch(e1.unwrapParenthesis().expr) {
 			case TField(dynExpr, fa) if(Main.getExprType(dynExpr).isDynamic()): {
 				switch(fa) {
@@ -1363,7 +1505,18 @@ class Expressions extends SubCompiler {
 		}
 	}
 
-	inline function compileForEqualityBinop(e: TypedExpr) {
+	function compileForEqualityBinop(e: TypedExpr): String {
+		// Special handling for 'this' comparison
+		// When comparing with 'this', we need to handle the case where
+		// one side is a shared_ptr and the other is a raw pointer
+		switch(e.expr) {
+			case TConst(TThis): {
+				// 'this' is a raw pointer, just return it
+				return "this";
+			}
+			case _:
+		}
+		
 		// If the type requests direct equality, don't alter
 		if(Main.getExprType(e).getMeta().maybeHas(Meta.DirectEquality)) {
 			return Main.compileExpressionOrError(e);
@@ -1371,6 +1524,27 @@ class Expressions extends SubCompiler {
 
 		final t = Main.getExprType(e);
 		final unwrapped = t.unwrapNullTypeOrSelf();
+		
+		// For type parameters in template classes, always compile directly without conversions
+		// This is critical for template types like T in Sll<T>
+		switch(unwrapped) {
+			case TInst(clsRef, params): {
+				final cls = clsRef.get();
+				// Check if this is a type parameter (single letter name, no module)
+				// OR if this is a concrete instantiation of a template parameter
+				if((cls.name.length == 1 && cls.module == "") || params.length == 0) {
+					// This is likely a template parameter T or a simple type
+					// Compile it directly without any memory management conversion
+					return Main.compileExpressionOrError(e);
+				}
+			}
+			case TAbstract(_, _) | TDynamic(_) | TFun(_, _) | TAnonymous(_) | TType(_, _) | TEnum(_, _): {
+				// Basic types and others should be compiled directly
+				// Don't apply memory management conversions to these
+			}
+			case _:
+		}
+		
 		final mmt = Types.getMemoryManagementTypeFromType(unwrapped);
 
 		// Check if this is an Array type which uses value equality
@@ -1393,6 +1567,10 @@ class Expressions extends SubCompiler {
 		// If wrapped in std::optional, normalize to a pointer value with value_or(nullptr).
 		if(unwrapped.isPtr() || mmt == SharedPtr || mmt == UniquePtr) {
 			final cpp = Main.compileExpressionOrError(e);
+			// If it's a SharedPtr, extract the raw pointer for comparison
+			if(mmt == SharedPtr && !t.isNull()) {
+				return cpp + ".get()";
+			}
 			return if(t.isNull()) {
 				cpp + ".value_or(" + Compiler.PointerNullCpp + ")";
 			} else {
@@ -1400,11 +1578,16 @@ class Expressions extends SubCompiler {
 			}
 		}
 
-		// Fallback: compare values
-		return compileExpressionAsValue(e);
+		// For value types, just compile directly
+		if(mmt == Value) {
+			return Main.compileExpressionOrError(e);
+		}
+
+		// Fallback: compile normally
+		return Main.compileExpressionOrError(e);
 	}
 
-	inline function checkForPrimitiveStringAddition(strExpr: TypedExpr, primExpr: TypedExpr) {
+	function checkForPrimitiveStringAddition(strExpr: TypedExpr, primExpr: TypedExpr): Bool {
 		return Main.getExprType(strExpr).isString() && Main.getExprType(primExpr).isPrimitive();
 	}
 
@@ -2562,11 +2745,47 @@ class Expressions extends SubCompiler {
 				if(maybeModuleType != null) {
 					final mCpp = moduleNameToCpp(maybeModuleType, originalExpr.pos);
 					if(isAnyCast) {
-						// If casting from Any
-						IComp.addInclude("any", compilingInHeader, true);
-						result = "std::any_cast<" + mCpp + ">(" + result + ")";
+						// Check if the target type is an interface or abstract class
+						var isInterface = false;
+						var isGenericInterface = false;
+						switch(maybeModuleType) {
+							case TClassDecl(clsRef): {
+								final cls = clsRef.get();
+								isInterface = cls.isInterface;
+								// Check if it's a generic interface like Cloneable<T>
+								isGenericInterface = isInterface && cls.params.length > 0;
+							}
+							case _:
+						}
+						
+						if(isInterface) {
+							// For interfaces, we cannot use std::any_cast because they are abstract
+							// Instead, we need to cast to a pointer or shared_ptr
+							IComp.addInclude("any", compilingInHeader, true);
+							IComp.addInclude("memory", compilingInHeader, true);
+							
+							// For generic interfaces, we can't directly cast to the interface type
+							// We need to handle this differently
+							if(isGenericInterface) {
+								// For generic interfaces like Cloneable<T>,
+								// we need to extract the actual implementation type
+								// Since we're casting from Any, we know it contains a value type T
+								// We should cast directly to T, not to std::shared_ptr<void>
+								// Get the target expression's actual type
+								final targetType = Main.getExprType(originalExpr);
+								// If this is being used in a clone() context, just cast to the actual type
+								result = "std::any_cast<" + TComp.compileType(targetType, originalExpr.pos) + ">(" + result + ")";
+							} else {
+								// Try to cast to shared_ptr for non-generic interfaces
+								result = "std::any_cast<std::shared_ptr<" + mCpp + ">>(" + result + ")";
+							}
+						} else {
+							// If casting from Any to non-interface type
+							IComp.addInclude("any", compilingInHeader, true);
+							result = "std::any_cast<" + mCpp + ">(" + result + ")";
+						}
 					} else {
-						// C-style case
+						// C-style cast
 						result = "((" + mCpp + ")(" + result + "))";
 					}
 				}
