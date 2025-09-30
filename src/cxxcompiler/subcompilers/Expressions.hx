@@ -1336,10 +1336,18 @@ class Expressions extends SubCompiler {
 						// Check if the C++ expression looks like a raw numeric value (e.g., "tempLeft")
 						// This catches cases where the type system says it's a number but the string doesn't end with ()
 						// Also handle member access like obj->field or obj.field
-						if(~/^[a-zA-Z_][a-zA-Z0-9_]*$/.match(cppExpr1) || ~/^\d+$/.match(cppExpr1) ||
-						   ~/->[\w]+$/.match(cppExpr1) || ~/\.[\w]+$/.match(cppExpr1)) {
-							// Check if it's actually a numeric type that needs std::to_string
-							if(e1Type.isCppNumberType() || e1Type.isPrimitive()) {
+						// Always wrap numeric types with std::to_string when concatenating with strings
+						if(e1Type.isCppNumberType() || e1Type.isPrimitive()) {
+							// Check if it's not already wrapped in a function call
+							if(!~/\(.*\)$/.match(cppExpr1) && !~/^std::to_string\(/.match(cppExpr1)) {
+								cppExpr1 = "std::to_string(" + cppExpr1 + ")";
+								usedToString = true;
+							}
+						} else if(~/^[a-zA-Z_][a-zA-Z0-9_]*$/.match(cppExpr1) || ~/^\d+$/.match(cppExpr1) ||
+						          ~/->[\w]+$/.match(cppExpr1) || ~/\.[\w]+$/.match(cppExpr1)) {
+							// Check if it might be a numeric type that wasn't caught above
+							// This is a fallback for edge cases
+							if(e1Type.isPrimitive()) {
 								cppExpr1 = "std::to_string(" + cppExpr1 + ")";
 								usedToString = true;
 							}
@@ -1366,10 +1374,18 @@ class Expressions extends SubCompiler {
 					} else {
 						// Check if the C++ expression looks like a raw numeric value
 						// Also handle member access like obj->field or obj.field
-						if(~/^[a-zA-Z_][a-zA-Z0-9_]*$/.match(cppExpr2) || ~/^\d+$/.match(cppExpr2) ||
-						   ~/->[\w]+$/.match(cppExpr2) || ~/\.[\w]+$/.match(cppExpr2)) {
-							// Check if it's actually a numeric type that needs std::to_string
-							if(e2Type.isCppNumberType() || e2Type.isPrimitive()) {
+						// Always wrap numeric types with std::to_string when concatenating with strings
+						if(e2Type.isCppNumberType() || e2Type.isPrimitive()) {
+							// Check if it's not already wrapped in a function call
+							if(!~/\(.*\)$/.match(cppExpr2) && !~/^std::to_string\(/.match(cppExpr2)) {
+								cppExpr2 = "std::to_string(" + cppExpr2 + ")";
+								usedToString = true;
+							}
+						} else if(~/^[a-zA-Z_][a-zA-Z0-9_]*$/.match(cppExpr2) || ~/^\d+$/.match(cppExpr2) ||
+						          ~/->[\w]+$/.match(cppExpr2) || ~/\.[\w]+$/.match(cppExpr2)) {
+							// Check if it might be a numeric type that wasn't caught above
+							// This is a fallback for edge cases
+							if(e2Type.isPrimitive()) {
 								cppExpr2 = "std::to_string(" + cppExpr2 + ")";
 								usedToString = true;
 							}
