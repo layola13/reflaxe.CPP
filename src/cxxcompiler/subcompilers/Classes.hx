@@ -223,9 +223,46 @@ class Classes extends SubCompiler {
 		IComp.resetAndInitIncludes(headerOnly, [filename + Compiler.HeaderExt]);
 		IComp.handleSpecialIncludeMeta(classType.meta);
 		
-		// Auto-include memory for classes that need shared_ptr
-		// Check if any field uses shared_ptr or the class name suggests it needs memory management
-		if(classType.name == "MainEvent" || classType.name == "MainLoop") {
+		// Auto-include memory for classes that use SharedPtr or UniquePtr
+		final classMMT = classType.getMemoryManagementType();
+		if(classMMT == SharedPtr || classMMT == UniquePtr) {
+			IComp.addInclude("memory", true, true);
+		}
+		
+		// Check if any field or method uses smart pointers
+		var needsMemory = false;
+		for(field in varFields) {
+			final fieldType = field.field.type;
+			final fieldMMT = Types.getMemoryManagementTypeFromType(fieldType);
+			if(fieldMMT == SharedPtr || fieldMMT == UniquePtr) {
+				needsMemory = true;
+				break;
+			}
+		}
+		
+		if(!needsMemory) {
+			for(func in funcFields) {
+				// Check return type
+				if(func.ret != null) {
+					final retMMT = Types.getMemoryManagementTypeFromType(func.ret);
+					if(retMMT == SharedPtr || retMMT == UniquePtr) {
+						needsMemory = true;
+						break;
+					}
+				}
+				// Check arguments
+				for(arg in func.args) {
+					final argMMT = Types.getMemoryManagementTypeFromType(arg.type);
+					if(argMMT == SharedPtr || argMMT == UniquePtr) {
+						needsMemory = true;
+						break;
+					}
+				}
+				if(needsMemory) break;
+			}
+		}
+		
+		if(needsMemory) {
 			IComp.addInclude("memory", true, true);
 		}
 
