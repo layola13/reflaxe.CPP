@@ -1320,7 +1320,23 @@ class Expressions extends SubCompiler {
 				// Check if e1 needs conversion (when e2 is string and e1 is not)
 				if(e2IsString && !e1IsString) {
 					final e1Type = Main.getExprType(e1);
-					if(e1Type.isPrimitive() || e1Type.isCppNumberType()) {
+					// Check if type is Null<T> (std::optional)
+					if(e1Type.isNull()) {
+						// For Null<T> types, we need to convert to string properly
+						// Get the underlying type
+						final underlyingType = e1Type.unwrapNullTypeOrSelf();
+						if(underlyingType.isPrimitive() || underlyingType.isCppNumberType()) {
+							// For optional numeric types, convert using std::to_string
+							// We need to check if has_value() and convert accordingly
+							cppExpr1 = "(" + cppExpr1 + ".has_value() ? std::to_string(" + cppExpr1 + ".value()) : \"null\")";
+							usedToString = true;
+						} else {
+							// For other optional types, use Std::string conversion
+							// This will handle the optional properly
+							cppExpr1 = "haxe::Std::string(" + cppExpr1 + ")";
+							usedToString = false; // Std::string includes its own handling
+						}
+					} else if(e1Type.isPrimitive() || e1Type.isCppNumberType()) {
 						// Convert numeric types to string
 						cppExpr1 = Compiler.ToStringFromPrim + "(" + cppExpr1 + ")";
 						usedToString = true;
@@ -1359,7 +1375,23 @@ class Expressions extends SubCompiler {
 				// Check if e2 needs conversion (when e1 is string and e2 is not)
 				if(e1IsString && !e2IsString) {
 					final e2Type = Main.getExprType(e2);
-					if(e2Type.isPrimitive() || e2Type.isCppNumberType()) {
+					// Check if type is Null<T> (std::optional)
+					if(e2Type.isNull()) {
+						// For Null<T> types, we need to convert to string properly
+						// Get the underlying type
+						final underlyingType = e2Type.unwrapNullTypeOrSelf();
+						if(underlyingType.isPrimitive() || underlyingType.isCppNumberType()) {
+							// For optional numeric types, convert using std::to_string
+							// We need to check if has_value() and convert accordingly
+							cppExpr2 = "(" + cppExpr2 + ".has_value() ? std::to_string(" + cppExpr2 + ".value()) : \"null\")";
+							usedToString = true;
+						} else {
+							// For other optional types, use Std::string conversion
+							// This will handle the optional properly
+							cppExpr2 = "haxe::Std::string(" + cppExpr2 + ")";
+							usedToString = false; // Std::string includes its own handling
+						}
+					} else if(e2Type.isPrimitive() || e2Type.isCppNumberType()) {
 						// Convert numeric types to string
 						cppExpr2 = Compiler.ToStringFromPrim + "(" + cppExpr2 + ")";
 						usedToString = true;

@@ -235,6 +235,7 @@ class Anon extends SubCompiler {
 		final templateConstructorAssigns = [];
 		final templateFunctionAssigns = [];
 		final extractorFuncs = [];
+		final toStringParts = [];
 
 		// Convert any memory management type of "o" into a value reference.
 		final o = "haxe::unwrap(o)";
@@ -255,6 +256,23 @@ class Anon extends SubCompiler {
 				optionalFields.push({ field: f, paramStr: v + " = " + Compiler.OptionalNullCpp });
 			} else {
 				requiredFields.push({ field: f, paramStr: v });
+			}
+			
+			// Build toString parts for each field
+			final fieldStr = '"' + f.name + ': " + ';
+			switch(f.type) {
+				case TFun(_, _): {
+					// For function fields, just show the field name
+					toStringParts.push(fieldStr + '"<function>"');
+				}
+				case _ if(f.optional): {
+					// For optional fields, check if they have a value
+					toStringParts.push(fieldStr + '(' + f.name + '.has_value() ? haxe::DynamicToString(' + f.name + '.value()) : "null")');
+				}
+				case _: {
+					// For regular fields, use DynamicToString
+					toStringParts.push(fieldStr + 'haxe::DynamicToString(' + f.name + ')');
+				}
 			}
 		}
 
@@ -323,6 +341,16 @@ class Anon extends SubCompiler {
 				constructorAssigns.join(";\n\t") + ";" + 
 				"\n\treturn result;\n}";
 			decl += constructor.tab() + "\n";
+		}
+		
+		// Add toString() method
+		if(toStringParts.length > 0) {
+			var toStringMethod = "\n// toString() method\nstd::string toString() const {\n\t";
+			toStringMethod += 'return std::string("{") + ';
+			toStringMethod += toStringParts.join(' + ", " + ');
+			toStringMethod += ' + "}";';
+			toStringMethod += "\n}";
+			decl += toStringMethod.tab() + "\n";
 		}
 
 		if(fields.length > 0) {
@@ -417,8 +445,15 @@ class Anon extends SubCompiler {
 		for(name => as in anonStructs) {
 			decls.push(as.cpp);
 			for(f in as.constructorOrder) {
-				// Add forward declarations instead of full type includes to avoid circular dependencies
-				addForwardDeclarationsForType(f.type, f.pos ?? PositionHelper.unknownPos());
+				// For types used in toString(), we need full includes, not just forward declarations
+				// Check if this type is used in a context that requires the full definition
+				final needsFullInclude = true; // Since we're generating toString() methods now
+				if(needsFullInclude) {
+					Main.onTypeEncountered(f.type, true, f.pos ?? PositionHelper.unknownPos());
+				} else {
+					// Add forward declarations for types not used in toString
+					addForwardDeclarationsForType(f.type, f.pos ?? PositionHelper.unknownPos());
+				}
 			}
 		}
 		return decls.join("\n\n");

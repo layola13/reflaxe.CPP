@@ -767,7 +767,14 @@ class Compiler extends reflaxe.DirectToStringCompiler {
 				content += "#include \"__Int64.h\"\n";
 			}
 			content += "\n";
-			// Use forward declarations instead of including headers to avoid circular dependencies
+			
+			// Add includes for types that need full definitions (e.g., for toString methods)
+			final includes = IComp.compileHeaderIncludes();
+			if(includes.length > 0) {
+				content += includes + "\n";
+			}
+			
+			// Add forward declarations for remaining types
 			content += "// Forward declarations\n";
 			content += IComp.compileForwardDeclares() + "\n\n";
 			content += "namespace haxe {\n\n";
